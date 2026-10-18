@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from datetime import datetime
 
@@ -43,6 +44,7 @@ def main() -> None:
                     help="serve the live dashboard and open it in the browser (--no-view turns it off)")
     ap.add_argument("--view-port", type=int, default=8000, help="port for the dashboard")
     ap.add_argument("--sim-fall", help="fall Recording that the dashboard's Simulate fall button plays")
+    ap.add_argument("--history", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     cals = None
@@ -98,10 +100,12 @@ def main() -> None:
 def start_view(args, console: ConsoleSink):
     from pathlib import Path
     from backend import server
-    from backend.dashboard import SIM_FALL, Dashboard, Tee, WebSink
+    from backend.dashboard import HISTORY, SIM_FALL, Dashboard, History, Notices, Tee, WebSink, load_env
 
+    load_env()
     hub = server.Hub()
-    web = WebSink(hub)
+    history = History(hub, "replay" if args.replay else "live", Path(args.history) if args.history else HISTORY)
+    web = WebSink(hub, history, Notices(hub, history))
     sink = Tee(console, web)
     pipe = Pipeline(sink, detector.make(args.detector))
     view = Dashboard(hub, pipe, sink, web, Path(args.sim_fall) if args.sim_fall else SIM_FALL)
@@ -110,7 +114,8 @@ def start_view(args, console: ConsoleSink):
                  "calibrate_s": config.CALIBRATE_S, "t_fall": config.T_FALL,
                  "t_static": config.T_STATIC, "sit_max_s": config.SIT_MAX_S,
                  "stillness_s": config.STILLNESS_S, "countdown_s": config.COUNTDOWN_S,
-                 "detector": pipe.detector.name, "links": sorted(config.RECEIVERS)})
+                 "detector": pipe.detector.name, "links": sorted(config.RECEIVERS),
+                 "resident_phone": os.environ.get("RESIDENT_PHONE", "")})
     try:
         url = server.serve(hub, args.view_port, view.on_command)
     except Exception as e:

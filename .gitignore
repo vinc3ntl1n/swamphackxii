@@ -4,3 +4,5 @@ __pycache__/
 .DS_Store
 data/sessions/
 data/model.joblib
+.env
+data/history.jsonl

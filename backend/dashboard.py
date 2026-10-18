@@ -1,36 +1,121 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import threading
 import time
 import traceback
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
 from backend import config, server
 from backend.capture.csi import Frame
 from backend.detection.detector import Verdict
-from backend.detection.fallflow import COUNTDOWN, FALL_CANDIDATE, IDLE, Sink
+from backend.detection.fallflow import ALERTED, COUNTDOWN, FALL_CANDIDATE, IDLE, Sink
 from backend.detection.motion import FrameInfo, MotionEvent, MotionTracker
 from backend.detection.pipeline import Pipeline
 from backend.training import recordings
 
 SIM_FALL = recordings.RECORDINGS / "train" / "fall_20261017-021504.log.gz"
+HISTORY = config.DATA_DIR / "history.jsonl"
+ENV_FILE = config.DATA_DIR.parent / ".env"
 TAIL_S = 1.0
 HOLD_S = config.STILLNESS_S + 1.5
 TICK_S = 0.05
 STALL_S = 0.3
 STATE_EVERY_S = 0.5
 SIM_FEED_AFTER_S = 2.0
+DELIVERY_WAIT_S = 10.0
+HISTORY_SHOWN = 300
+RESOLVE_REASONS = ("false_alarm", "handled")
 
 Result = tuple[MotionEvent, Verdict]
 
 
+def load_env(path: Path = ENV_FILE) -> None:
+    """Read KEY=value lines from .env without overriding the real environment."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        key, sep, value = line.strip().partition("=")
+        if sep and key and not key.startswith("#"):
+            os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+
+
+def clock(t: float) -> str:
+    return datetime.fromtimestamp(t).strftime("%H:%M:%S")
+
+
+class History:
+    """Falls, Check-ins, answers and Alerts, kept in data/history.jsonl across runs."""
+
+    def __init__(self, hub: server.Hub, mode: str, path: Path = HISTORY) -> None:
+        self.hub, self.mode, self.path = hub, mode, path
+        self.sim = False
+        self.sim_falls: set[int] = set()
+        if path.exists():
+            for line in path.read_text().splitlines()[-HISTORY_SHOWN:]:
+                try:
+                    self.hub.publish({"type": "history", **json.loads(line)})
+                except ValueError:
+                    continue
+
+    def add(self, t: float, what: str, **fields) -> None:
+        fall = fields.get("fall")
+        sim = fall in self.sim_falls if isinstance(fall, int) else self.sim
+        entry = {"t": t, "what": what, "mode": "sim" if sim else self.mode, **fields}
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except OSError as e:
+            print(f"  (history not saved: {e})", flush=True)
+        self.hub.publish({"type": "history", **entry})
+
+
+class Notices:
+    """Messages for the Resident or Caregiver, sent by the messaging sidecar (see docs/adr/0001)."""
+
+    def __init__(self, hub: server.Hub, history: History) -> None:
+        self.hub, self.history = hub, history
+        self.next_id = 1
+        self.pending: dict[int, tuple[float, int]] = {}
+
+    def send(self, t: float, to: str, kind: str, fall: int, text: str) -> None:
+        nid, self.next_id = self.next_id, self.next_id + 1
+        self.pending[nid] = (time.monotonic(), fall)
+        msg = {"id": nid, "to": to, "kind": kind, "fall": fall, "text": text, "status": "sending"}
+        self.hub.publish({"type": "notify", "t": t, **msg})
+        self.history.add(t, "notify", **msg)
+
+    def delivered(self, t: float, nid: int, status: str) -> bool:
+        pending = self.pending.pop(nid, None)
+        if pending is None:
+            return False
+        self._status(t, nid, pending[1], status)
+        return True
+
+    def overdue(self, t: float) -> None:
+        now = time.monotonic()
+        for nid, (sent, fall) in list(self.pending.items()):
+            if now - sent > DELIVERY_WAIT_S:
+                del self.pending[nid]
+                self._status(t, nid, fall, "not_delivered")
+
+    def _status(self, t: float, nid: int, fall: int, status: str) -> None:
+        self.hub.publish({"type": "delivery", "t": t, "id": nid, "fall": fall, "status": status})
+        self.history.add(t, "delivery", id=nid, fall=fall, status=status)
+
+
 class WebSink:
-    def __init__(self, hub: server.Hub) -> None:
-        self.hub = hub
+    def __init__(self, hub: server.Hub, history: History, notices: Notices) -> None:
+        self.hub, self.history, self.notices = hub, history, notices
+        self.fall = 0
+        self.fall_t: float | None = None
+        self.alert_t: float | None = None
 
     def log(self, t: float, text: str) -> None:
         self.hub.publish({"type": "log", "t": t, "text": text})
@@ -39,10 +124,19 @@ class WebSink:
         self.hub.publish({"type": "alarm", "on": on})
 
     def ask_resident(self, t: float) -> None:
-        self.hub.publish({"type": "alert", "t": t, "kind": "ask_resident", "status": "sent"})
+        self.fall += 1
+        self.fall_t, self.alert_t = t, None
+        if self.history.sim:
+            self.history.sim_falls.add(self.fall)
+        self.notices.send(t, "resident", "check_in", self.fall,
+                          "Fall detected. Are you OK? Reply 1 = I'm OK, 2 = I need help.")
 
     def alert_caregiver(self, t: float) -> None:
-        self.hub.publish({"type": "alert", "t": t, "kind": "caregiver", "status": "sent"})
+        self.alert_t = t
+        self.history.add(t, "alert", fall=self.fall)
+        self.notices.send(t, "caregiver", "alert", self.fall,
+                          f"ALERT: the Resident may have fallen at {clock(self.fall_t or t)} "
+                          "and did not answer the Check-in.")
 
     def event(self, t: float, event: MotionEvent, verdict: Verdict, links: str, sim: bool) -> None:
         details = {k: v for k, v in verdict.details.items() if k != "links"}
@@ -52,32 +146,40 @@ class WebSink:
             why = "classified"
         else:
             why = "moved_again"
-        self.hub.publish({
-            "type": "event", "t": t, "label": verdict.label,
-            "confidence": round(float(verdict.confidence), 2), "links": links,
+        msg = {
+            "label": verdict.label, "confidence": round(float(verdict.confidence), 2), "links": links,
             "details": details, "why": why, "start": event.start, "end": event.end, "sim": sim,
-        })
+        }
+        self.hub.publish({"type": "event", "t": t, **msg})
+        if verdict.label == "fall" and why == "classified":
+            self.history.add(t, "confirmed_fall", fall=self.fall, links=links, details=details)
 
 
 class Tee:
+    """Fans out to every sink; a failing sink is reported, never allowed to stop detection."""
+
     def __init__(self, *sinks: Sink) -> None:
         self.sinks = sinks
 
     def log(self, t: float, text: str) -> None:
-        for sink in self.sinks:
-            sink.log(t, text)
+        self._each("log", t, text)
 
     def alarm(self, on: bool) -> None:
-        for sink in self.sinks:
-            sink.alarm(on)
+        self._each("alarm", on)
 
     def ask_resident(self, t: float) -> None:
-        for sink in self.sinks:
-            sink.ask_resident(t)
+        self._each("ask_resident", t)
 
     def alert_caregiver(self, t: float) -> None:
+        self._each("alert_caregiver", t)
+
+    def _each(self, name: str, *args) -> None:
         for sink in self.sinks:
-            sink.alert_caregiver(t)
+            try:
+                getattr(sink, name)(*args)
+            except Exception:
+                print(f"  ({type(sink).__name__}.{name} failed; detection continues)", flush=True)
+                traceback.print_exc()
 
 
 class Clock:
@@ -136,7 +238,7 @@ def held(frames: Iterator[Frame], seconds: float, speed: float) -> Iterator[Fram
         while f.t - tail[0].t > TAIL_S:
             tail.popleft()
         yield f
-    if not tail:
+    if not tail or seconds <= 0:
         return
     print(f"Replay ended: holding its last second for {seconds:.0f} s so the Stillness Window can finish",
           flush=True)
@@ -177,7 +279,7 @@ class SimFall:
 
 
 class Dashboard:
-    """Shares the pipeline with the frame loop under one lock, and runs browser commands."""
+    """Shares the pipeline with the frame loop under one lock, and runs browser and sidecar commands."""
 
     def __init__(self, hub: server.Hub, pipe: Pipeline, sink: Sink, web: WebSink,
                  sim_path: Path = SIM_FALL) -> None:
@@ -233,31 +335,82 @@ class Dashboard:
                 info, result = self.sim.pipe.process(frame)
                 self._view(lambda: self._show(self.sim.pipe, frame, info, result, sim=True))
             if self.sim.done:
-                self.sim = None
+                self._sim(None)
         if self.clock.stalled():
             self.pipe.flow.tick(now)
+        self.web.notices.overdue(now)
         self._view(lambda: self._state(now))
 
+    def _sim(self, sim: SimFall | None) -> None:
+        self.sim = sim
+        self.web.history.sim = sim is not None
+
     def _command(self, msg: dict) -> None:
-        cmd, now, flow = msg.get("cmd"), self.clock.now(), self.pipe.flow
-        if cmd == "cancel":
+        cmd, now, flow, web = msg.get("cmd"), self.clock.now(), self.pipe.flow, self.web
+        if cmd in ("ok", "help"):
+            self._answer(now, cmd, msg.get("fall"))
+        elif cmd == "cancel":
             if flow.state == COUNTDOWN:
-                self.sim = None
-            flow.cancel(now, "the dashboard (I'm OK)")
-        elif cmd == "reset":
-            self.sim = None
+                web.history.add(now, "countdown_cancelled", fall=web.fall, by="caregiver")
+                self._sim(None)
+            flow.cancel(now, "the Caregiver")
+        elif cmd == "resolve":
+            reason = msg.get("reason")
+            if flow.state != ALERTED or reason not in RESOLVE_REASONS:
+                return
+            web.history.add(now, "resolved", fall=web.fall, reason=reason)
+            self._sim(None)
             flow.reset(now)
+        elif cmd == "call":
+            web.history.add(now, "called", fall=web.fall)
+            self.sink.log(now, "Caregiver called the Resident")
+        elif cmd == "delivered":
+            nid, status = msg.get("id"), msg.get("status")
+            if isinstance(nid, int) and status in ("sent", "failed") and web.notices.delivered(now, nid, status):
+                if status == "failed":
+                    self.sink.log(now, f"Message {nid} failed to send")
         elif cmd == "simulate":
             if self.sim is not None or flow.state != IDLE:
-                busy = "a simulated fall is playing" if self.sim is not None else f"already {flow.state}"
+                busy = "a Simulated Fall is playing" if self.sim is not None else f"already {flow.state}"
                 self.sink.log(now, f"Simulate fall ignored: {busy}")
                 return
             try:
-                self.sim = SimFall(self.sim_path, self.pipe, self.sink, now)
+                sim = SimFall(self.sim_path, self.pipe, self.sink, now)
             except (OSError, ValueError, KeyError) as e:
                 self.sink.log(now, f"Simulate fall failed: {e}")
                 return
-            self.sink.log(now, f"Simulated fall: playing {self.sim.name}")
+            self._sim(sim)
+            self.sink.log(now, f"Simulated Fall: playing {sim.name}")
+
+    def _answer(self, now: float, cmd: str, fall) -> None:
+        flow, web = self.pipe.flow, self.web
+        open_fall = flow.state in (COUNTDOWN, ALERTED)
+        if not open_fall or (fall is not None and fall != web.fall):
+            web.history.add(now, "stale_answer", fall=fall, answer=cmd)
+            self.sink.log(now, f"Stale Answer ignored: {cmd} for fall {fall if fall is not None else '?'}")
+            return
+        if cmd == "help":
+            web.history.add(now, "help_request", fall=web.fall)
+            self.sink.log(now, "Help Request from the Resident")
+            escalate = getattr(flow, "escalate", None)
+            if flow.state == COUNTDOWN and escalate is not None:
+                escalate(now)
+            else:
+                web.notices.send(now, "caregiver", "help", web.fall,
+                                 f"The Resident asked for help (fall at {clock(web.fall_t or now)}).")
+            return
+        if flow.state == COUNTDOWN:
+            web.history.add(now, "countdown_cancelled", fall=web.fall, by="resident")
+            self._sim(None)
+            flow.cancel(now, "the Resident (I'm OK)")
+            return
+        late = round(now - (web.alert_t or now))
+        web.history.add(now, "late_answer", fall=web.fall, late_s=late)
+        self.sink.log(now, f"Late Answer: the Resident is OK ({late} s after the Alert)")
+        web.notices.send(now, "caregiver", "all_clear", web.fall,
+                         f"All clear: the Resident answered they're OK, {late} s after the Alert.")
+        self._sim(None)
+        flow.reset(now)
 
     def _show(self, pipe: Pipeline, frame: Frame, info: FrameInfo, result: Result | None, sim: bool) -> None:
         tracker = pipe.trackers[frame.link]
@@ -284,7 +437,7 @@ class Dashboard:
         self.hub.publish({
             "type": "state", "state": flow.state,
             "t": flow.started if flow.started is not None else now,
-            "deadline": flow.deadline, "now": now, "sim": self.sim is not None,
+            "deadline": flow.deadline, "now": now, "sim": self.sim is not None, "fall": self.web.fall,
         })
 
     def _flush(self) -> None:
