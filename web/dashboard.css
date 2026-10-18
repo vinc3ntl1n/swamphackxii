@@ -1772,7 +1772,10 @@ body[data-view="dev"] .bg-dots {
   flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
-  padding-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
+  padding-block: 14px;
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
 }
