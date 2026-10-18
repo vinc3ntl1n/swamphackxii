@@ -19,7 +19,7 @@ from backend.detection.motion import FrameInfo, MotionEvent, MotionTracker
 from backend.detection.pipeline import Pipeline
 from backend.training import recordings
 
-SIM_FALL = recordings.RECORDINGS / "train" / "fall_20261017-021504.log.gz"
+SIM_FALL = Path(__file__).resolve().parent / "assets" / "sim_fall.log.gz"
 HISTORY = config.DATA_DIR / "history.jsonl"
 ENV_FILE = config.DATA_DIR.parent / ".env"
 TAIL_S = 1.0

@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.detection.motion import FrameInfo
 
 WEB = Path(__file__).resolve().parent.parent / "web"
+MODELS = WEB.parent / "hardware" / "enclosure" / "web"
 HOST = "127.0.0.1"
 STICKY = ("source", "config", "state", "alarm")
 KEPT = ("record", "event", "log", "notify", "delivery", "history")
@@ -202,6 +203,8 @@ def make_app(hub: Hub, on_command: Commands | None = None) -> FastAPI:
             sender.cancel()
             hub.leave(queue)
 
+    if MODELS.is_dir():
+        app.mount("/models", StaticFiles(directory=MODELS), name="models")
     app.mount("/", StaticFiles(directory=WEB), name="web")
     return app
 
