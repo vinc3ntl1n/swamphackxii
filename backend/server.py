@@ -25,7 +25,7 @@ from backend.detection.motion import FrameInfo
 WEB = Path(__file__).resolve().parent.parent / "web"
 MODELS = WEB.parent / "hardware" / "enclosure" / "web"
 HOST = "127.0.0.1"
-STICKY = ("source", "config", "session", "state", "alarm")
+STICKY = ("source", "config", "state", "alarm", "session")
 KEPT = ("record", "event", "log", "notify", "delivery", "history")
 KEPT_MAX = 2000
 BACKLOG_S = 60.0
