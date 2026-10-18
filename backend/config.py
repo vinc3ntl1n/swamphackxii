@@ -1,6 +1,7 @@
 from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+R2_BUCKET = "swamphacksdata"
 
 RECEIVERS = {"A": "80:B5:4E:F3:AF:20", "B": "80:B5:4E:F1:A4:BC"}
 SENDER_BOARD = "D0:CF:13:26:5E:18"

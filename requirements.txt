@@ -6,3 +6,5 @@ joblib
 fastapi
 uvicorn[standard]
 httpx
+boto3
+python-dotenv
