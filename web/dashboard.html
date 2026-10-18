@@ -317,9 +317,9 @@ const bgCtx = bg.getContext("2d");
 const DOT_COLORS = ["18,84,46", "31,122,67", "47,125,75", "76,175,110", "112,196,140", "160,214,170"];
 const calmMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 const dots = [];
-const AVOID_RADIUS = 110;
-const AVOID_PUSH = 22;
-const AVOID_EASE = 0.045;
+const AVOID_RADIUS = 150;
+const AVOID_PUSH = 40;
+const AVOID_EASE = 0.08;
 const pointer = { x: 0, y: 0, tx: 0, ty: 0, px: -1e4, py: -1e4 };
 
 function seedDots() {
@@ -367,7 +367,8 @@ function drawBg(nowMs) {
     let tx = 0;
     let ty = 0;
     if (dist < AVOID_RADIUS && dist > 0.1) {
-      const falloff = (1 - dist / AVOID_RADIUS) ** 2;
+      const k = 1 - dist / AVOID_RADIUS;
+      const falloff = k * k * (3 - 2 * k);
       tx = (dx / dist) * falloff * AVOID_PUSH * persp;
       ty = (dy / dist) * falloff * AVOID_PUSH * persp;
     }
