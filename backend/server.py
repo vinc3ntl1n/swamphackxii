@@ -25,7 +25,7 @@ from backend.detection.motion import FrameInfo
 WEB = Path(__file__).resolve().parent.parent / "web"
 MODELS = WEB.parent / "hardware" / "enclosure" / "web"
 HOST = "127.0.0.1"
-STICKY = ("source", "config", "state", "alarm")
+STICKY = ("source", "config", "state", "alarm", "session")
 KEPT = ("record", "event", "log", "notify", "delivery", "history")
 KEPT_MAX = 2000
 BACKLOG_S = 60.0
@@ -174,7 +174,6 @@ def _command(on_command: Commands | None, text: str | None) -> None:
             on_command(msg)
 
 
-def make_app(hub: Hub, on_command: Commands | None = None) -> FastAPI:
 class RecordingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -195,7 +194,7 @@ def action_allowed(request: Request) -> Response | None:
     return None
 
 
-def make_app(hub: Hub) -> FastAPI:
+def make_app(hub: Hub, on_command: Commands | None = None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware("http")
