@@ -75,8 +75,8 @@ Run everything from the repo root with `python -m`. Each command finds the recei
 | Command | What it does |
 |---|---|
 | `python -m backend.capture.live` | Check capture: prints packet rate, subcarriers, RSSI and a motion bar for each receiver, once a second. Walking across one link's line should move only that link's bar. Saves the raw stream to `data/sessions/`. |
-| `python -m backend.run` | Full detection pipeline live in the terminal. Stay still for the first 10 s while it calibrates. |
-| `python -m backend.run --replay data/sessions/<file>.log --speed 0` | Same, on a saved session (`--speed 0` = as fast as possible). |
+| `python -m backend.run` | Full detection pipeline live, in the terminal and on the dashboard at `http://127.0.0.1:8000/dashboard` (see below). Stay still for the first 10 s while it calibrates. `--no-view` keeps it terminal-only, `--view-port 8001` moves it. |
+| `python -m backend.run --replay data/sessions/<file>.log --speed 0` | Same, on a saved session (`--speed 0` = as fast as possible). A Recording (`data/recordings/*/*.log.gz`) replays with the calibration saved next to it, since the clip is shorter than the 10 s calibration. |
 | `python -m backend.capture.replay <log>` | Play a session log or Recording through the capture meter. |
 | `python -m backend.training.record fall --n 10` | Record 10 labeled clips: wait for 3-2-1-GO, move, hold still until "saved". Labels: `fall`, `sit-down`, `walk`, `empty`. Add `--split test` for the test set, `--recalibrate` after moving the boards. Also opens the live record page at `http://127.0.0.1:8000/` (see below); `--no-view` turns it off, `--view-port 8001` moves it. The laptop also speaks the cues (see below); `--no-voice` goes back to the beeps. |
 | `python -m backend.training.calibrate` | Learn the empty room again for every receiver that sends packets, save it to `data/calibration.json` and exit. After the announcement there are 3 s to leave, then everyone stays out of the area and nobody moves for 10 s; if something moved, it tries again. Shows the live page and speaks like `record.py` (`--no-view`, `--view-port`, `--no-voice`). |
@@ -131,13 +131,39 @@ The Recalibrate button sends `POST /calibrate` with `Content-Type: application/j
 
 `record.py` waits for the first packet before it starts, so a slow serial start no longer eats clip 1's get-in-position time. If the packet stream ends (a replay running out), it stops with a message instead of hanging. On Ctrl-C it exits quietly and the page shows `STOPPED`. Packets of an unexpected size are left out of the page once a calibration is loaded, so one stray packet can't reset the charts. If the page itself breaks, the terminal says so once, the page shows `VIEW STOPPED`, and the recording carries on.
 
+### The dashboard
+
+`backend.run` serves `web/dashboard.html` at `/dashboard` (the record page stays at `/`) and opens it. It is the live demo screen, made to be read from a few metres away:
+
+- A big **state badge**: `IDLE`, `MOVING` (and on which link), `FALL CANDIDATE` with "hold still… deciding in N s", `FALL DETECTED` with "alerting caregiver in N s" (red, pulsing), then `CAREGIVER ALERTED`. A `SIMULATED` tag shows while a simulated fall is running.
+- Buttons: **I'm OK** cancels the countdown, **Reset** clears an alert, and **Simulate fall** plays a real fall Recording (`--sim-fall`, default `fall_20261017-021504`) through its own trackers into the same fall flow, so the detector, the Stillness Window and the countdown all run for real without hardware. The buttons send `{"cmd":"cancel"|"reset"|"simulate"}` over `/ws`. A ticker thread runs them under the same lock as the frame loop, and it keeps the countdown going when packets stop.
+- A top-down **room map**: the sender at the point of the V, a line to each receiver. A line turns blue while its link is moving, and red for the link(s) of the fall being counted down.
+- **Why it's a fall**: the last fall's `peak` and `static_change` against `T_FALL` and `T_STATIC`. Before any fall it shows why the last Motion Event was not one.
+- The waveform (Auto follows the link that moved last), motion energy for each link with Motion Events shaded, and an **event log** of verdicts with their numbers plus the fall-flow messages.
+- An alarm tone while the countdown runs, with a mute toggle. Browsers only allow sound after a click on the page, so the toggle says so until then.
+
+When a replay ends, its last second is repeated for 5.5 s so the Stillness Window can finish (Recordings stop 8.5 s after GO), and the dashboard stays up until Ctrl-C.
+
+On top of the record page's messages, `run.py` sends `frame`s with a `"link"` field (one feed per link) and:
+
+```json
+{"type":"state","state":"COUNTDOWN","t":...,"deadline":...,"now":...,"sim":false}
+{"type":"event","t":...,"label":"fall","confidence":1.0,"links":"A","details":{"peak":24.97,"static_change":0.58,"duration_s":3.09},"why":"classified","start":...,"end":...,"sim":false}
+{"type":"log","t":...,"text":"Confirmed Fall: Countdown started"}
+{"type":"alarm","on":true}
+{"type":"alert","t":...,"kind":"ask_resident","status":"sent"}
+```
+
+`why` is `classified`, `moved_again` (moved during the Stillness Window) or `cut_short` (kept moving for 8 s). `alert` `kind` is `ask_resident` or `caregiver`. These come from `WebSink` in `backend/dashboard.py`, which `run.py` tees with the console output; the ntfy push can hook in there. `state` is re-sent every 0.5 s during a countdown, and a page that connects late gets the latest `state` and `alarm`, plus every `event`, `log` and `alert` so far.
+
 ## Layout
 
 ```
 backend/
   config.py            all tunable numbers and the data folder location
-  run.py               terminal front end for the pipeline
+  run.py               terminal front end for the pipeline (and the dashboard with --view)
   server.py            live page server: WebSocket hub, 20 Hz signal feed, static files
+  dashboard.py         dashboard glue: WebSink, browser commands, Simulate fall
   capture/             getting CSI from the board into Frames
     csi.py             parse CSI lines, read logs
     live.py            read the receiver over USB, save sessions
@@ -156,6 +182,8 @@ backend/
     train.py           train and evaluate the random forest
 web/
   record.html          live record page (timing cues + signal)
+  dashboard.html       live demo dashboard (state, room map, verdicts, alarm)
+  dashboard.css        dashboard layout, on top of style.css
   signal.js            waveform, heatmap, energy and CSI-shape charts, reusable for the dashboard
   style.css            colors (light and dark) and layout
 arduino/
@@ -170,6 +198,6 @@ data/
 
 ## Status
 
-Working: capture, replay, motion detection, both detectors, the fall flow, recording (with the live record page) and training. Not built yet: the web dashboard (`backend/server.py` and `web/signal.js` are its first pieces), ntfy phone alerts, and the Python side of the Arduino link. The pipeline currently prints the alarm and alerts to the console.
+Working: capture, replay, motion detection, both detectors, the fall flow, recording (with the live record page), training and the live dashboard. Not built yet: ntfy phone alerts and the Python side of the Arduino link. The alarm and alerts show on the dashboard and in the console.
 
-Both receivers are read together, with motion, calibration and Motion Events per link, in the terminal pipeline, the capture check, replay and `record.py`. `train.py` takes features from the strongest link in each two-link clip, the same way the live pipeline does. Not built yet: a room-area view and a record page that shows both links. The detector was tuned and trained on link A clips only, so it hasn't been checked on falls seen by link B yet.
+Both receivers are read together, with motion, calibration and Motion Events per link, in the terminal pipeline, the capture check, replay and `record.py`. `train.py` takes features from the strongest link in each two-link clip, the same way the live pipeline does. The dashboard shows both links; the record page still shows one. The detector was tuned and trained on link A clips only, so it hasn't been checked on falls seen by link B yet.
