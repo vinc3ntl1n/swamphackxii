@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fall dashboard</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+<main class="dash">
+  <section class="dash-left" aria-label="Fall detection status">
+    <div class="status" id="status" data-tone="idle" role="status" aria-live="polite">
+      <div class="status-head"><span>ROOM STATUS</span><span class="status-tag" id="sim-tag" hidden>SIMULATED</span></div>
+      <div class="status-word" id="status-word">CONNECTING</div>
+      <div class="status-sub" id="status-sub"></div>
+      <div class="progress"><div class="progress-fill" id="status-progress"></div></div>
+    </div>
+    <div class="actions">
+      <button type="button" class="btn ok" id="ok" disabled>I'm OK</button>
+      <button type="button" class="btn" id="simulate" disabled>Simulate fall</button>
+      <button type="button" class="btn" id="reset" disabled>Reset</button>
+    </div>
+    <div class="pair">
+      <figure class="card room">
+        <header><h2>Room</h2><span class="note">top-down view</span></header>
+        <div class="plot">
+          <svg viewBox="0 0 320 250" role="img" aria-label="Room map with the sender and receivers A and B" id="map">
+            <rect class="wall" x="6" y="6" width="308" height="238" rx="10"></rect>
+            <line class="link-glow" id="glow-A" x1="160" y1="218" x2="50" y2="50"></line>
+            <line class="link-glow" id="glow-B" x1="160" y1="218" x2="270" y2="50"></line>
+            <line class="link-line" id="line-A" x1="160" y1="218" x2="50" y2="50"></line>
+            <line class="link-line" id="line-B" x1="160" y1="218" x2="270" y2="50"></line>
+            <rect class="board" x="38" y="38" width="24" height="24" rx="5"></rect>
+            <rect class="board" x="258" y="38" width="24" height="24" rx="5"></rect>
+            <rect class="board" x="148" y="206" width="24" height="24" rx="5"></rect>
+            <text x="22" y="28">A</text>
+            <text x="286" y="28" text-anchor="end">B</text>
+            <text x="180" y="226">Sender</text>
+            <text class="small" x="40" y="27" id="map-A">no data</text>
+            <text class="small" x="266" y="27" text-anchor="end" id="map-B">no data</text>
+          </svg>
+        </div>
+      </figure>
+      <figure class="card why">
+        <header><h2 id="why-title">Why it's a fall</h2></header>
+        <div class="why-body" id="why"></div>
+      </figure>
+    </div>
+  </section>
+  <section class="dash-right" aria-label="Live signal and events">
+    <div class="chips" id="chips">
+      <span class="chip" id="source">–</span>
+      <span class="chip alert" id="stale" hidden></span>
+      <button type="button" class="chip sound" id="sound"></button>
+    </div>
+    <figure class="card wave">
+      <header>
+        <h2>Live signal</h2>
+        <span class="note" id="wave-note">8 subcarriers, flat = still, swings = movement</span>
+        <div class="toggle links" role="group" aria-label="Waveform link" id="wave-pick"></div>
+      </header>
+      <div class="plot"><canvas id="wave"></canvas></div>
+    </figure>
+    <figure class="card energy">
+      <header>
+        <h2>Motion energy</h2>
+        <span class="note">over T_ON starts a Motion Event; shaded = cut events</span>
+      </header>
+      <div class="energy-plots" id="energy-plots"></div>
+    </figure>
+    <figure class="card log">
+      <header><h2>Event log</h2><span class="note">newest first</span></header>
+      <ol class="events" id="events"></ol>
+    </figure>
+  </section>
+</main>
+<script type="module">
+import { SignalBuffer, Waveform, EnergyChart, readTheme, watchTheme, connect } from "./signal.js";
+
+const $ = (id) => document.getElementById(id);
+const STALE_MS = 2000;
+const MAX_ROWS = 200;
+const BEEP_MS = 700;
+const LABELS = { fall: "FALL", walk: "walk", "sit-down": "sit-down" };
+
+const links = new Map();
+const empty = new SignalBuffer();
+const wave = new Waveform($("wave"), empty);
+let theme = readTheme();
+let st = fresh();
+let conn = "connecting";
+let ever = false;
+let openedAt = performance.now();
+let pick = "auto";
+let muted = false;
+let audio = null;
+let beepTimer = null;
+try {
+  muted = localStorage.getItem("dash-muted") === "1";
+} catch {}
+
+function fresh() {
+  return {
+    cfg: null, source: null, ended: false, state: null, stateAt: 0, alarm: false,
+    events: [], lastFall: null, lastVerdict: null, simTag: false,
+  };
+}
+
+function linkFor(name) {
+  let l = links.get(name);
+  if (l) return l;
+  const buf = new SignalBuffer();
+  const plot = document.createElement("div");
+  plot.className = "plot";
+  plot.hidden = true;
+  const tag = document.createElement("span");
+  tag.className = "plot-tag";
+  tag.textContent = `link ${name}`;
+  const canvas = document.createElement("canvas");
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute("aria-label", `Motion energy of link ${name}`);
+  plot.append(tag, canvas);
+  const plots = [...links.keys(), name].sort();
+  $("energy-plots").insertBefore(plot, $("energy-plots").children[plots.indexOf(name)] ?? null);
+  l = { name, buf, arrival: null, movedAt: null, plot, chart: new EnergyChart(canvas, buf) };
+  links.set(name, l);
+  renderPicker();
+  return l;
+}
+
+const isFresh = (l, nowMs) => l.arrival != null && nowMs - l.arrival < STALE_MS;
+
+function clock(t) {
+  return new Date(t * 1000).toLocaleTimeString([], { hour12: false });
+}
+
+function onMessage(msg) {
+  if (msg.type === "frame") {
+    const l = linkFor(msg.link ?? "A");
+    l.arrival = performance.now();
+    const f = l.buf.push(msg, l.arrival);
+    if (f && f.level === "moving") l.movedAt = f.t;
+  } else if (msg.type === "source") {
+    st.source = msg.mode;
+    st.ended = !!msg.ended;
+  } else if (msg.type === "config") {
+    st.cfg = msg;
+    for (const name of msg.links ?? []) linkFor(name);
+  } else if (msg.type === "state") {
+    if (msg.sim) st.simTag = true;
+    else if (msg.state === "IDLE") st.simTag = false;
+    st.state = msg;
+    st.stateAt = performance.now();
+  } else if (msg.type === "alarm") st.alarm = !!msg.on;
+  else if (msg.type === "event") onEvent(msg);
+  else if (msg.type === "log") {
+    if (!msg.text.startsWith("Motion Event:")) addRow(msg.t, null, msg.text, "note");
+  } else if (msg.type === "alert") {
+    const text = msg.kind === "caregiver" ? "Caregiver alert sent" : "Asked the resident: “Are you OK?”";
+    addRow(msg.t, null, `📣 ${text}`, "note");
+  }
+}
+
+function onState(s) {
+  conn = s;
+  if (s !== "open") return;
+  ever = true;
+  st = fresh();
+  for (const l of links.values()) {
+    l.buf.reset(0);
+    l.arrival = l.movedAt = null;
+  }
+  $("events").replaceChildren();
+  renderWhy();
+  openedAt = performance.now();
+}
+
+function onEvent(ev) {
+  st.events.push(ev);
+  if (st.events.length > MAX_ROWS) st.events.shift();
+  st.lastVerdict = ev;
+  if (ev.label === "fall") st.lastFall = ev;
+  const d = ev.details;
+  const parts = [];
+  if (d.peak != null) parts.push(`peak ${d.peak}`, `room change ${d.static_change}`);
+  if (d.duration_s != null) parts.push(`${d.duration_s} s`);
+  parts.push(`link ${ev.links}`);
+  if (ev.why === "moved_again") parts.push("moved again, so not a fall");
+  if (ev.why === "cut_short") parts.push("kept moving, so not a fall");
+  if (ev.confidence < 1 && ev.why === "classified") parts.push(`confidence ${ev.confidence}`);
+  if (ev.sim) parts.push("simulated");
+  addRow(ev.t, ev.label, parts.join(" · "), "event");
+  renderWhy();
+}
+
+function addRow(t, label, text, kind) {
+  const li = document.createElement("li");
+  li.className = kind;
+  const time = document.createElement("span");
+  time.className = "time";
+  time.textContent = clock(t);
+  const pill = document.createElement("span");
+  if (label) {
+    pill.className = "pill";
+    pill.dataset.label = label;
+    pill.textContent = LABELS[label] ?? label;
+  }
+  const body = document.createElement("span");
+  body.className = "nums";
+  body.textContent = text;
+  li.append(time, pill, body);
+  const list = $("events");
+  list.prepend(li);
+  while (list.children.length > MAX_ROWS) list.lastChild.remove();
+}
+
+function bar(label, value, limit, unit) {
+  const row = document.createElement("div");
+  row.className = "why-row";
+  const pass = value >= limit;
+  row.dataset.pass = String(pass);
+  const top = Math.max(limit * 2, value * 1.1);
+  const head = document.createElement("div");
+  head.className = "why-label";
+  const name = document.createElement("span");
+  name.textContent = label;
+  const val = document.createElement("span");
+  const b = document.createElement("b");
+  b.textContent = String(value);
+  const mark = document.createElement("span");
+  mark.className = "verdict-mark";
+  mark.textContent = pass ? ` ≥ ${limit} ✓` : ` < ${limit} ✗`;
+  val.append(b, mark);
+  head.append(name, val);
+  const track = document.createElement("div");
+  track.className = "bar";
+  const fill = document.createElement("div");
+  fill.className = "bar-fill";
+  fill.style.width = `${Math.min(100, (value / top) * 100).toFixed(1)}%`;
+  const tick = document.createElement("div");
+  tick.className = "bar-mark";
+  tick.style.left = `${((limit / top) * 100).toFixed(1)}%`;
+  const tickLabel = document.createElement("span");
+  tickLabel.textContent = unit;
+  tick.append(tickLabel);
+  track.append(fill, tick);
+  row.append(head, track);
+  return row;
+}
+
+function para(cls, text) {
+  const p = document.createElement("div");
+  p.className = cls;
+  p.textContent = text;
+  return p;
+}
+
+function renderWhy() {
+  const box = $("why");
+  const cfg = st.cfg;
+  const ev = st.lastFall ?? st.lastVerdict;
+  $("why-title").textContent = !ev || ev.label === "fall" ? "Why it's a fall" : "Why it's not a fall";
+  if (!ev || !cfg) {
+    const rule = cfg ? `peak ≥ ${cfg.t_fall} and room change ≥ ${cfg.t_static}` : "a hard movement and a changed room";
+    box.replaceChildren(para("why-empty", `No Motion Event yet. A fall needs ${rule}, then ${cfg ? cfg.stillness_s : 4} s of stillness.`));
+    return;
+  }
+  const d = ev.details;
+  const rows = [para("why-meta", `${clock(ev.t)} · link ${ev.links} · ${LABELS[ev.label] ?? ev.label}${ev.sim ? " · simulated" : ""}`)];
+  if (d.peak != null) {
+    rows.push(bar("Peak motion energy", d.peak, cfg.t_fall, "T_FALL"));
+    rows.push(bar("Room change (static_change)", d.static_change, cfg.t_static, "T_STATIC"));
+  }
+  let foot;
+  if (ev.why === "moved_again") foot = `Moved again within the ${cfg.stillness_s} s Stillness Window, so not a fall.`;
+  else if (ev.why === "cut_short") foot = "Kept moving for 8 s, so it was walking, not a fall.";
+  else if (cfg.detector !== "threshold") {
+    foot = `The random forest decided ${ev.label} (confidence ${ev.confidence}); the thresholds are shown for reference.`;
+  } else if (ev.label === "fall") {
+    foot = `A hard movement, the room looks different afterwards (someone on the floor), and ${cfg.stillness_s} s without moving.`;
+  } else {
+    const low = [];
+    if (d.peak < cfg.t_fall) low.push(`peak ${d.peak} is under ${cfg.t_fall}`);
+    if (d.static_change < cfg.t_static) low.push(`room change ${d.static_change} is under ${cfg.t_static}`);
+    foot = `Not a fall: ${low.join(" and ")}.`;
+  }
+  rows.push(para("why-foot", foot));
+  box.replaceChildren(...rows);
+}
+
+function serverNow(nowMs) {
+  return st.state ? st.state.now + (nowMs - st.stateAt) / 1000 : null;
+}
+
+function statusFor(nowMs) {
+  if (conn !== "open") {
+    return ever ? { tone: "idle", word: "DISCONNECTED", sub: "run.py stopped? check the terminal" }
+      : { tone: "idle", word: "CONNECTING", sub: "" };
+  }
+  const s = st.state ? st.state.state : "IDLE";
+  const now = serverNow(nowMs);
+  if ((s === "FALL_CANDIDATE" || s === "COUNTDOWN") && st.state.deadline != null && now != null) {
+    const span = Math.max(0.1, st.state.deadline - st.state.t);
+    const left = Math.max(0, st.state.deadline - now);
+    if (s === "FALL_CANDIDATE") {
+      return { tone: "candidate", word: "FALL CANDIDATE", sub: `hold still… deciding in ${Math.ceil(left)} s`, progress: 1 - left / span };
+    }
+    return { tone: "countdown", word: "FALL DETECTED", sub: `alerting caregiver in ${Math.ceil(left)} s`, progress: left / span };
+  }
+  if (s === "ALERTED") return { tone: "alerted", word: "CAREGIVER ALERTED", sub: `sent at ${clock(st.state.t)}` };
+  const live = [...links.values()].filter((l) => isFresh(l, nowMs));
+  const moving = live.filter((l) => l.buf.latest()?.level === "moving").map((l) => l.name);
+  if (moving.length) return { tone: "moving", word: "MOVING", sub: `on link ${moving.join(" + ")}` };
+  if (live.some((l) => l.buf.latest()?.level === "calibrating")) {
+    return { tone: "calibrating", word: "CALIBRATING", sub: "keep the area still for 10 s" };
+  }
+  if (st.state && st.state.sim) return { tone: "idle", word: "IDLE", sub: "simulated fall playing…" };
+  if (!live.length) {
+    return { tone: "idle", word: "IDLE", sub: st.ended ? "replay finished · Simulate fall still works" : "waiting for packets" };
+  }
+  return { tone: "idle", word: "IDLE", sub: "all quiet" };
+}
+
+function setText(el, text) {
+  if (el.textContent !== text) el.textContent = text;
+}
+
+function renderStatus(nowMs) {
+  const c = statusFor(nowMs);
+  const box = $("status");
+  if (box.dataset.tone !== c.tone) box.dataset.tone = c.tone;
+  setText($("status-word"), c.word);
+  setText($("status-sub"), c.sub);
+  $("status-progress").style.width = `${(Math.min(1, Math.max(0, c.progress ?? 0)) * 100).toFixed(1)}%`;
+  $("sim-tag").hidden = !st.simTag;
+  const s = st.state ? st.state.state : "IDLE";
+  const open = conn === "open";
+  $("ok").disabled = !open || s !== "COUNTDOWN";
+  $("simulate").disabled = !open || s !== "IDLE" || !!(st.state && st.state.sim);
+  $("reset").disabled = !open || s === "IDLE";
+}
+
+function renderMap(nowMs) {
+  const s = st.state ? st.state.state : "IDLE";
+  for (const name of ["A", "B"]) {
+    const l = links.get(name);
+    const f = l && isFresh(l, nowMs) ? l.buf.latest() : null;
+    let status = f ? (f.level === "moving" ? "moving" : "quiet") : "none";
+    if (s === "COUNTDOWN" || s === "ALERTED") {
+      if (st.lastFall && st.lastFall.links.split("+").includes(name)) status = "event";
+    } else if (s === "FALL_CANDIDATE" && l && l.movedAt != null && l.movedAt >= st.state.t - 10) status = "event";
+    const line = $(`line-${name}`);
+    if (line.dataset.status !== status) line.dataset.status = status;
+    const glow = $(`glow-${name}`);
+    const on = status === "moving" || status === "event" ? status : "";
+    if (glow.dataset.on !== on) glow.dataset.on = on;
+    let text = "no data";
+    if (f) text = f.energy != null ? `${f.energy.toFixed(1)}× ${f.level}` : f.level;
+    setText($(`map-${name}`), text);
+  }
+}
+
+function renderChips(nowMs) {
+  const source = $("source");
+  const mode = st.source ? (st.ended ? `${st.source} · ended` : st.source) : "–";
+  setText(source, mode);
+  if (source.dataset.source !== (st.source ?? "")) source.dataset.source = st.source ?? "";
+  for (const l of links.values()) {
+    let chip = $(`chip-${l.name}`);
+    if (!chip) {
+      chip = document.createElement("span");
+      chip.className = "chip";
+      chip.id = `chip-${l.name}`;
+      chip.innerHTML = '<span class="dot"></span><span></span>';
+      $("chips").insertBefore(chip, $("stale"));
+    }
+    const f = isFresh(l, nowMs) ? l.buf.latest() : null;
+    const level = f ? f.level : "";
+    if (chip.dataset.level !== level) chip.dataset.level = level;
+    const hz = f && f.hz != null ? `${f.hz.toFixed(0)}/s` : "";
+    const text = f ? `link ${l.name} · ${[hz, `${f.rssi} dBm`, f.level].filter(Boolean).join(" · ")}` : `link ${l.name} · no data`;
+    setText(chip.lastChild, text);
+  }
+  const stale = $("stale");
+  let text = "";
+  if (ever && conn !== "open") text = "⚠ Lost the connection to run.py, retrying";
+  else if (conn === "open" && !st.ended) {
+    const last = Math.max(openedAt, ...[...links.values()].map((l) => l.arrival ?? 0));
+    const since = nowMs - last;
+    if (since > STALE_MS) text = `⚠ No packets for ${Math.floor(since / 1000)} s: is the SEND board powered?`;
+  }
+  stale.hidden = !text;
+  setText(stale, text);
+}
+
+function waveLink(nowMs) {
+  if (pick !== "auto" && links.has(pick)) return links.get(pick);
+  const live = [...links.values()].filter((l) => l.buf.latest());
+  if (!live.length) return null;
+  const moved = live.filter((l) => l.movedAt != null).sort((a, b) => b.movedAt - a.movedAt);
+  if (moved.length && isFresh(moved[0], nowMs)) return moved[0];
+  return live.filter((l) => isFresh(l, nowMs))[0] ?? live[0];
+}
+
+function renderPicker() {
+  const box = $("wave-pick");
+  const names = ["auto", ...[...links.keys()].sort()];
+  if (box.children.length !== names.length) {
+    box.replaceChildren(...names.map((name) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.dataset.link = name;
+      b.textContent = name === "auto" ? "Auto" : name;
+      b.addEventListener("click", () => {
+        pick = name;
+        renderPicker();
+      });
+      return b;
+    }));
+  }
+  for (const b of box.children) b.setAttribute("aria-pressed", String(b.dataset.link === pick));
+}
+
+function eventMarks(name) {
+  return st.events
+    .filter((e) => e.links.split("+").includes(name))
+    .map((e) => ({ counts: [], go: e.start, pre: 0, post: Math.max(0, e.end - e.start) }));
+}
+
+function ensureAudio() {
+  if (!audio) {
+    try {
+      audio = new AudioContext();
+    } catch {
+      return null;
+    }
+  }
+  if (audio.state === "suspended") audio.resume().catch(() => {});
+  return audio;
+}
+
+function beep() {
+  if (!audio || audio.state !== "running") return;
+  const t = audio.currentTime;
+  for (const [at, hz] of [[0, 880], [0.22, 660]]) {
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    osc.type = "square";
+    osc.frequency.value = hz;
+    gain.gain.setValueAtTime(0.0001, t + at);
+    gain.gain.exponentialRampToValueAtTime(0.12, t + at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.19);
+    osc.connect(gain).connect(audio.destination);
+    osc.start(t + at);
+    osc.stop(t + at + 0.2);
+  }
+}
+
+function renderSound() {
+  const want = st.alarm && !muted && conn === "open";
+  if (want && !beepTimer) {
+    beep();
+    beepTimer = setInterval(beep, BEEP_MS);
+  } else if (!want && beepTimer) {
+    clearInterval(beepTimer);
+    beepTimer = null;
+  }
+  const running = audio && audio.state === "running";
+  const mode = muted ? "muted" : running ? "on" : "blocked";
+  const btn = $("sound");
+  if (btn.dataset.sound !== mode) {
+    btn.dataset.sound = mode;
+    btn.textContent = { muted: "🔇 Alarm muted", on: "🔊 Alarm sound on", blocked: "🔊 Click to allow alarm sound" }[mode];
+    btn.setAttribute("aria-pressed", String(!muted));
+  }
+}
+
+function loop() {
+  const nowMs = performance.now();
+  let now = null;
+  for (const l of links.values()) {
+    const t = l.buf.now(nowMs);
+    if (t != null && (now == null || t > now)) now = t;
+  }
+  const shown = waveLink(nowMs);
+  wave.buffer = shown ? shown.buf : empty;
+  setText($("wave-note"), shown ? `link ${shown.name} · 8 subcarriers, flat = still, swings = movement` : "waiting for packets");
+  wave.draw(now, [], theme, null);
+  const withData = [...links.values()].filter((l) => l.buf.latest());
+  for (const l of links.values()) {
+    l.plot.hidden = withData.length ? !l.buf.latest() : l.name !== "A";
+    if (!l.plot.hidden) l.chart.draw(now, eventMarks(l.name), theme, null, st.cfg);
+  }
+  renderStatus(nowMs);
+  renderMap(nowMs);
+  renderChips(nowMs);
+  renderSound();
+  requestAnimationFrame(loop);
+}
+
+const link = connect(onMessage, onState);
+for (const [id, cmd] of [["ok", "cancel"], ["simulate", "simulate"], ["reset", "reset"]]) {
+  $(id).addEventListener("click", () => {
+    ensureAudio();
+    link.send({ cmd });
+  });
+}
+$("sound").addEventListener("click", () => {
+  const blocked = !audio || audio.state !== "running";
+  ensureAudio();
+  if (blocked && !muted) return;
+  muted = !muted;
+  try {
+    localStorage.setItem("dash-muted", muted ? "1" : "0");
+  } catch {}
+});
+document.addEventListener("pointerdown", ensureAudio);
+document.addEventListener("keydown", ensureAudio);
+watchTheme(() => {
+  theme = readTheme();
+});
+renderWhy();
+renderPicker();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
