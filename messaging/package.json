@@ -7,10 +7,12 @@
     "node": ">=22"
   },
   "scripts": {
+    "check": "node check.mjs",
     "start": "node sidecar.mjs",
     "console": "node sidecar.mjs --console"
   },
   "dependencies": {
+    "@photon-ai/imessage-kit": "3.0.0",
     "@spectrum-ts/core": "^12.12.0",
     "@spectrum-ts/imessage-local": "^12.11.0"
   }

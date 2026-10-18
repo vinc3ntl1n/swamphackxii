@@ -2,12 +2,13 @@
 // the Resident's replies into the dashboard's ok / help commands (docs/adr/0001).
 //
 //   node messaging/sidecar.mjs --console      try it without Photon: texts print here, type 1 or 2 to reply
-//   node messaging/sidecar.mjs                real texts through Photon (run `npm install` in messaging/ first)
+//   node messaging/sidecar.mjs                real texts through Photon (run `npm ci --prefix messaging` first)
 //
 // Options: --url ws://127.0.0.1:8000/ws (match run.py's --view-port). Phone numbers come from .env:
 // RESIDENT_PHONE and CAREGIVER_PHONE; PHOTON_PROVIDER picks the line (see below).
 import { existsSync, readFileSync } from "node:fs";
 import readline from "node:readline";
+import { installMessagesCompatibility, messagingErrorHint } from "./imessage-compat.mjs";
 
 const args = process.argv.slice(2);
 const CONSOLE = args.includes("--console");
@@ -44,11 +45,12 @@ async function listenForReplies(onReply) {
     const { app } = await photon();
     console.log(`Listening for replies (${PROVIDER}).`);
     for await (const [, message] of app.messages) {
-      if (message.content.type === "text") onReply(message.sender.id, message.content.text);
+      if (message.content.type === "text") await onReply(message.sender.id, message.content.text);
     }
   } catch (e) {
     console.log(`Stopped listening for replies: ${e.message}`);
-    if (PROVIDER === "imessage-local") console.log("Is this Mac signed into Messages, and does the terminal have Full Disk Access?");
+    const hint = messagingErrorHint(e);
+    if (hint) console.log(hint);
     process.exit(1);
   }
 }
@@ -63,6 +65,8 @@ function photon() {
     const { Spectrum } = await import("@spectrum-ts/core");
     let provider, credentials;
     if (PROVIDER === "imessage-local") {
+      const { IMessageSDK } = await import("@photon-ai/imessage-kit");
+      installMessagesCompatibility(IMessageSDK);
       ({ localIMessage: provider } = await import("@spectrum-ts/imessage-local"));
     } else if (PROVIDER === "cloud") {
       ({ imessage: provider } = await import("@spectrum-ts/imessage"));
