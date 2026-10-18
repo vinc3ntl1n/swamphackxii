@@ -78,7 +78,8 @@ Run everything from the repo root with `python -m`. Each command finds the recei
 | `python -m backend.run` | Full detection pipeline live in the terminal. Stay still for the first 10 s while it calibrates. |
 | `python -m backend.run --replay data/sessions/<file>.log --speed 0` | Same, on a saved session (`--speed 0` = as fast as possible). |
 | `python -m backend.capture.replay <log>` | Play a session log or Recording through the capture meter. |
-| `python -m backend.training.record fall --n 10` | Record 10 labeled clips: wait for 3-2-1-GO, move, hold still until "saved". Labels: `fall`, `sit-down`, `walk`, `empty`. Add `--split test` for the test set, `--recalibrate` after moving the boards. Also opens the live record page at `http://127.0.0.1:8000/` (see below); `--no-view` turns it off, `--view-port 8001` moves it. |
+| `python -m backend.training.record fall --n 10` | Record 10 labeled clips: wait for 3-2-1-GO, move, hold still until "saved". Labels: `fall`, `sit-down`, `walk`, `empty`. Add `--split test` for the test set, `--recalibrate` after moving the boards. Also opens the live record page at `http://127.0.0.1:8000/` (see below); `--no-view` turns it off, `--view-port 8001` moves it. The laptop also speaks the cues (see below); `--no-voice` goes back to the beeps. |
+| `python -m backend.training.calibrate` | Learn the empty room again for every receiver that sends packets, save it to `data/calibration.json` and exit. After the announcement there are 3 s to leave, then everyone stays out of the area and nobody moves for 10 s; if something moved, it tries again. Shows the live page and speaks like `record.py` (`--no-view`, `--view-port`, `--no-voice`). |
 | `python -m backend.training.train` | Train the random forest on `data/recordings/train/`, score it on `data/recordings/test/` (or cross-validation if there's no test set), write `data/model.joblib` and `data/results.json`. |
 | `python -m backend.run --detector rf` | Use the trained model instead of the threshold rules. |
 
@@ -95,6 +96,7 @@ The **left half** is for the performer:
 - A huge phase word with a progress bar. `GET IN POSITION` (with seconds until the count), then `3`, `2`, `1` with **HOLD STILL** under them, then `GO!` with the action in violet, a color used for nothing else. About 2 s after GO it switches to `HOLD STILL / STAY DOWN` (fall), `HOLD STILL / STAY SEATED` (sit-down) or `KEEP WALKING` (walk) until the clip window ends. Empty-room clips never show `GO!`: they show `NOBODY MOVES` for the whole window. Then `✓ SAVED` in green, or the problem (`⚠ MOVED BEFORE GO`, `⚠ MOVED AT THE END`, …) in amber, with "do an extra". After the last clip that result stays up, with `DONE` and the session totals under it. Long cues wrap onto two lines so they stay big.
 - A red **WAIT FOR GO** banner when the live motion energy crosses `T_ON` during the 3-2-1 count. It clears below `T_OFF`. This is the same energy rule `record.py` later uses to flag "moved before GO". A third of the existing movement clips were flagged that way, because people start moving on "1".
 - The label's instruction, a timeline strip of the current clip (position, 3, 2, 1, GO, hold, saved) with a cursor and the recorded window under it, the last result, and the list of saved clips with each clip's energy around GO.
+- A **Recalibrate** button, for when the boards moved or the room changed. Pressing it queues one recalibration, and every open page says "Recalibrating before the next clip". `record.py` does it at the start of the next clip, before `GET IN POSITION`. If a clip is still in its get-in-position wait, it cuts the wait short, recalibrates, then starts that clip's wait again. It never interrupts 3-2-1, GO or the recording. Once the last clip's 3-2-1 has started there is no clip left to recalibrate before, so the press is refused and the page says so; run `calibrate.py` instead. The header says `RECALIBRATING` and the page shows `CALIBRATING` with "everyone out of the area, nobody moves" and a progress bar. Learning starts 3 s after the announcement (`CALIBRATE_SETTLE_S`), so whoever is still on the mat has time to leave. When it's done the page goes straight to the next `GET IN POSITION`, and the clips after it use and save the new calibration. The button is greyed out while a recalibration is queued or running, after the session ends, and while the page is disconnected.
 
 The **right half** is the live signal, all on one time axis (newest at the right, last 20 s):
 
@@ -106,6 +108,14 @@ The **right half** is the live signal, all on one time axis (newest at the right
 
 With two receivers, the page shows link A's signal, or link B's if A isn't plugged in. The Recording still saves both links.
 
+`calibrate.py` shows the same page without the Recalibrate button: `CALIBRATING`, then `✓ CALIBRATED` with the links it saved.
+
+### Spoken cues
+
+The performer doesn't have to look at the screen: the laptop speaks each phase with macOS `say`. "Clip 3 of 10. Get in position.", then "Three", "Two", "One" on the count, then "Go! Fall." ("Go! Sit down.", "Go! Walk.", or "Recording. Nobody move." for empty-room clips). About 2 s after GO it says "Stay down. Hold still." for falls and "Stay seated. Hold still." for sit-downs. After the Pop/Basso it says "Saved." or the first problem and "Do an extra.", e.g. "Moved before go. Do an extra.", and at the end "Done. 8 clean, 2 flagged." Calibration says "Calibrating. Everyone out, nobody move." and "Calibrated.", and a Recalibrate press says "Recalibrating before the next clip."
+
+The spoken count and GO replace the Tink/Glass beeps. A new phrase stops the one still playing, so the numbers never queue up late. A plain `say` starts sounding about 0.36 s after it is launched, so the count words and GO are rendered to audio files when the session starts and played with `afplay`, which starts in about 0.08 s. `--no-voice`, or a machine without `say`, gives the old beeps. Packet times (`go_t` and the marks) and the recorded window are the same either way.
+
 The page's clock is the packet time, not the computer's, so the marks line up with the signal in replays too. `backend/server.py` and `web/signal.js` don't depend on `record.py`, so the dashboard can reuse them. The server sends JSON over `/ws`:
 
 ```json
@@ -115,7 +125,9 @@ The page's clock is the packet time, not the computer's, so the marks line up wi
 {"type":"record","phase":"position","t":...,"clip":1,"n":10,"label":"fall","until":...}
 ```
 
-`frame` comes 20 times a second: the rows of every packet in a 50 ms slot, averaged. `record` phases are `calibrating`, `position`, `count` (`word`), `go`, `saved` (`file`, `seen`, `problems`, `go_t`) and `done` (`clean`, `flagged`, `stopped`). `failed` (`error`) means the page itself broke while recording carried on. A page that connects late first gets the latest `source` and `config`, every `record` so far, and the last 60 s of `frame`s.
+`frame` comes 20 times a second: the rows of every packet in a 50 ms slot, averaged. `record` phases are `calibrate_queued`, `calibrating`, `calibrated` (`links`), `position`, `count` (`word`), `go`, `saved` (`file`, `seen`, `problems`, `go_t`) and `done` (`clean`, `flagged`, `stopped`). `failed` (`error`) means the page itself broke while recording carried on. A page that connects late first gets the latest `source` and `config`, every `record` so far, and the last 60 s of `frame`s. A `calibrate.py` session sends `n` 0.
+
+The Recalibrate button sends `POST /calibrate` with `Content-Type: application/json`. The server answers 202 when the session queued it, 409 when no session can take it (calibrating, the last clip already counting, done, or none registered), 415 without the JSON content type, so a plain form on another site can't trigger it, and 403 unless the `Host` header is `127.0.0.1:<port>` or `localhost:<port>`, so a DNS-rebinding page can't either. The server only listens on 127.0.0.1. It calls whatever handler the session put in `hub.actions["calibrate"]`, so it still knows nothing about `record.py`.
 
 `record.py` waits for the first packet before it starts, so a slow serial start no longer eats clip 1's get-in-position time. If the packet stream ends (a replay running out), it stops with a message instead of hanging. On Ctrl-C it exits quietly and the page shows `STOPPED`. Packets of an unexpected size are left out of the page once a calibration is loaded, so one stray packet can't reset the charts. If the page itself breaks, the terminal says so once, the page shows `VIEW STOPPED`, and the recording carries on.
 
@@ -140,6 +152,7 @@ backend/
   training/            collecting labeled data and training the model
     recordings.py      save/load labeled Recordings
     record.py          record labeled clips
+    calibrate.py       learn the empty room again
     train.py           train and evaluate the random forest
 web/
   record.html          live record page (timing cues + signal)
@@ -149,7 +162,7 @@ arduino/
   cancel_button/       cancel button + buzzer sketch
 data/
   recordings/          labeled clips (.log.gz + .json metadata), train/ and test/
-  calibration.json     empty-room baseline used by record.py
+  calibration.json     empty-room baseline used by record.py, written by record.py and calibrate.py
   results.json         latest training scores
   sessions/            raw logs of every live run (not in git)
   model.joblib         trained model (not in git, rebuild with train.py)

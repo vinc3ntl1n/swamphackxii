@@ -11,6 +11,7 @@ import time
 import webbrowser
 from collections import deque
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import uvicorn
@@ -40,6 +41,7 @@ class Hub:
         self.backlog: deque[tuple[int, float, str]] = deque()
         self.clients: dict[asyncio.Queue[str], int] = {}
         self.loop: asyncio.AbstractEventLoop | None = None
+        self.actions: dict[str, Callable[[], bool]] = {}
 
     def publish(self, msg: dict) -> None:
         text = json.dumps(msg, separators=(",", ":"), allow_nan=False)
@@ -157,6 +159,16 @@ def make_app(hub: Hub) -> FastAPI:
     @app.get("/")
     async def index() -> FileResponse:
         return FileResponse(WEB / "record.html")
+
+    @app.post("/calibrate")
+    async def calibrate(request: Request) -> Response:
+        port = request.scope["server"][1]
+        if request.headers.get("host") not in (f"127.0.0.1:{port}", f"localhost:{port}"):
+            return Response(status_code=403)
+        if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+            return Response(status_code=415)
+        action = hub.actions.get("calibrate")
+        return Response(status_code=202 if action is not None and action() else 409)
 
     @app.websocket("/ws")
     async def ws(client: WebSocket) -> None:

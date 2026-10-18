@@ -264,6 +264,49 @@ body {
   color: var(--ink);
 }
 
+.recal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  flex: 0 0 auto;
+}
+
+.recal[hidden] {
+  display: none;
+}
+
+.recal button {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.recal button:hover:not(:disabled) {
+  background: var(--grid);
+}
+
+.recal button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.recal-note {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.recal-note.on {
+  color: var(--ink);
+  font-weight: 600;
+}
+
 .list-title {
   margin: 4px 0 0;
   font-size: 13px;

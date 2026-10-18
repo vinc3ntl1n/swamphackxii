@@ -19,6 +19,10 @@
     <p class="instruction" id="instruction"></p>
     <canvas class="timeline" id="timeline" role="img" aria-label="Phase timeline of the current clip"></canvas>
     <p class="result" id="result"></p>
+    <div class="recal" id="recal-box">
+      <button type="button" id="recal" disabled>Recalibrate</button>
+      <span class="recal-note" id="recal-note"></span>
+    </div>
     <h2 class="list-title">Saved clips this session</h2>
     <ol class="saved" id="saved"></ol>
   </section>
@@ -114,11 +118,12 @@ let lastArrival = null;
 let hover = null;
 let sparks = [];
 let shownWord = null;
+let asking = false;
 
 function fresh() {
   return {
     cfg: null, source: null, clips: new Map(), last: null, lastSaved: null, done: null,
-    failed: null, wait: false, lastT: null, calStart: null,
+    failed: null, wait: false, lastT: null, calStart: null, queued: false, calibrated: null, refused: false,
   };
 }
 
@@ -146,8 +151,16 @@ function onRecord(m) {
     state.failed = m.error;
     return;
   }
+  if (m.phase === "calibrate_queued") {
+    state.queued = true;
+    return;
+  }
+  state.refused = false;
   if (m.t > 0) state.lastT = m.t;
-  if (m.phase === "calibrating") state.calStart = m.t > 0 ? m.t : null;
+  if (m.phase === "calibrating") {
+    state.calStart = m.t > 0 ? m.t : null;
+    state.queued = false;
+  } else if (m.phase === "calibrated") state.calibrated = m;
   else if (m.phase === "position") clipOf(m).position = { t: m.t, until: m.until };
   else if (m.phase === "count") clipOf(m).counts.push({ t: m.t, word: m.word });
   else if (m.phase === "go") clipOf(m).go = m.t;
@@ -157,7 +170,10 @@ function onRecord(m) {
     if (c.go == null) c.go = m.go_t;
     state.lastSaved = m;
     addSaved(m);
-  } else if (m.phase === "done") state.done = m;
+  } else if (m.phase === "done") {
+    state.done = m;
+    state.queued = false;
+  }
   state.last = m;
 }
 
@@ -194,6 +210,11 @@ function resultCue(m) {
   return { tone: "problem", word: `⚠ ${first}`, sub, progress: 1 };
 }
 
+function calibratedCue(m) {
+  const links = m.links.length > 1 ? `links ${m.links.join(" + ")}` : `link ${m.links.join("")}`;
+  return { tone: "saved", word: "✓ CALIBRATED", sub: `${links} saved`, progress: 1 };
+}
+
 function progress(now, start, span) {
   if (now == null || start == null || !(span > 0)) return 0;
   return Math.min(1, Math.max(0, (now - start) / span));
@@ -211,9 +232,10 @@ function cueFor(now) {
   const clip = state.clips.get(m.clip);
   if (m.phase === "calibrating") {
     if (state.calStart == null && now != null) state.calStart = now;
-    const p = progress(now, state.calStart, cfg ? cfg.calibrate_s : 0);
-    return { tone: "count", word: "CALIBRATING", sub: "everyone out, nobody moves", progress: p };
+    const p = progress(now, state.calStart, cfg ? cfg.calibrate_s + (cfg.calibrate_settle_s ?? 0) : 0);
+    return { tone: "count", word: "CALIBRATING", sub: "everyone out of the area, nobody moves", progress: p };
   }
+  if (m.phase === "calibrated") return calibratedCue(m);
   if (m.phase === "position") {
     const prev = state.lastSaved;
     const holding = prev && prev.clip === m.clip - 1 && now != null;
@@ -238,6 +260,10 @@ function cueFor(now) {
     return { tone: "hold", word, sub, progress: p };
   }
   if (m.phase === "saved") return resultCue(m);
+  if (m.phase === "done" && !m.n) {
+    if (!m.stopped && state.calibrated) return calibratedCue(state.calibrated);
+    return { tone: "position", word: "STOPPED", sub: "calibration not saved", progress: 0 };
+  }
   if (m.phase === "done") {
     const totals = `${m.clean} clean · ${m.flagged} flagged`;
     if (!m.stopped && state.lastSaved) return { ...resultCue(state.lastSaved), sub: `DONE · ${totals}` };
@@ -298,12 +324,44 @@ function renderCue(now) {
   if (setText($("sub"), c.sub)) fitSub();
   $("progress").style.width = `${((c.progress ?? 0) * 100).toFixed(1)}%`;
   let head = "";
-  if (m && m.phase === "done") head = `${m.clip} of ${m.n} recorded`;
+  if (m && !m.n) head = "CALIBRATION";
+  else if (m && m.phase === "done") head = `${m.clip} of ${m.n} recorded`;
   else if (m && m.clip > 0) head = `CLIP ${m.clip} / ${m.n}`;
+  else if (m && state.clips.size) head = "RECALIBRATING";
   else if (m) head = "SETUP";
   setText($("clip"), head);
   setText($("label"), m ? m.label.toUpperCase() : "");
   setText($("instruction"), m ? INSTRUCTIONS[m.label] ?? "" : "");
+}
+
+function renderRecal() {
+  const m = state.last;
+  const calibrating = m != null && m.phase === "calibrating";
+  const live = conn === "open" && !state.failed && !state.done && m != null && m.n > 0;
+  $("recal-box").hidden = m != null && !m.n;
+  $("recal").disabled = !live || asking || state.queued || calibrating;
+  let note = "";
+  if (live && state.queued) note = "Recalibrating before the next clip";
+  else if (live && calibrating) note = "Calibrating: everyone out of the area, nobody moves";
+  else if (live && state.refused) note = "The session can't recalibrate right now";
+  else if (live) note = "if the boards moved or the room changed";
+  setText($("recal-note"), note);
+  $("recal-note").classList.toggle("on", live && (state.queued || calibrating || state.refused));
+}
+
+async function recalibrate() {
+  asking = true;
+  state.refused = false;
+  try {
+    const r = await fetch("/calibrate", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (!r.ok) state.refused = true;
+  } catch {
+    state.refused = true;
+  } finally {
+    asking = false;
+  }
 }
 
 function currentClip() {
@@ -525,6 +583,7 @@ function loop() {
   energy.draw(now, ms, theme, hx, state.cfg);
   shape.draw(theme);
   renderCue(now);
+  renderRecal();
   drawTimeline(now);
   renderChips(nowMs);
   renderTip(now, hit);
@@ -556,6 +615,7 @@ function restyle() {
 for (const b of document.querySelectorAll(".toggle button")) {
   b.addEventListener("click", () => setMode(b.dataset.mode));
 }
+$("recal").addEventListener("click", recalibrate);
 for (const [id, canvas] of Object.entries(plots)) {
   canvas.addEventListener("pointermove", (e) => (hover = { id, clientX: e.clientX, clientY: e.clientY }));
   canvas.addEventListener("pointerleave", () => (hover = null));

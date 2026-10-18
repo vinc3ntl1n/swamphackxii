@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import itertools
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
@@ -19,9 +22,12 @@ from backend.capture.csi import DEFAULT_LINK, parse_line
 from backend.detection.detector import ThresholdDetector
 from backend.detection.motion import MEASURE, MotionTracker
 
-PRE_S, POST_S = 1.5, 8.5
+PRE_S, POST_S, HOLD_S = 1.5, 8.5, 2.0
 SOUNDS = Path("/System/Library/Sounds")
 MAX_NOISY_FRAC = 0.2
+COUNT_WORDS = {"3": "Three", "2": "Two", "1": "One"}
+GO_WORDS = {"fall": "Go! Fall.", "sit-down": "Go! Sit down.", "walk": "Go! Walk.", "empty": "Recording. Nobody move."}
+HOLD_WORDS = {"fall": "Stay down. Hold still.", "sit-down": "Stay seated. Hold still."}
 
 Lines = Iterator[tuple[float, str, str]]
 
@@ -35,6 +41,43 @@ def beep(name: str) -> None:
         print("\a", end="", flush=True)
 
 
+class Speaker:
+    def __init__(self, on: bool) -> None:
+        self.on = on and shutil.which("say") is not None
+        self.proc: subprocess.Popen | None = None
+        self.text = ""
+        self.ready: dict[str, str] = {}
+        self.lock = threading.Lock()
+        self.dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True) if self.on else None
+
+    def prepare(self, texts: list[str]) -> None:
+        if self.on and shutil.which("afplay") is not None:
+            threading.Thread(target=self._render, args=(texts,), daemon=True).start()
+
+    def _render(self, texts: list[str]) -> None:
+        for i, text in enumerate(texts):
+            path = Path(self.dir.name) / f"{i}.aiff"
+            if subprocess.run(["say", "-o", str(path), text], capture_output=True).returncode == 0:
+                self.ready[text] = str(path)
+
+    def say(self, text: str, cut: bool = True) -> None:
+        if not self.on:
+            return
+        with self.lock:
+            if self.proc is not None and self.proc.poll() is None:
+                self.proc.terminate()
+                if not cut:
+                    text = f"{self.text} {text}"
+            path = self.ready.get(text)
+            self.text = text
+            self.proc = subprocess.Popen(["afplay", path] if path else ["say", text],
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def close(self) -> None:
+        if self.dir is not None:
+            self.dir.cleanup()
+
+
 class Reader(threading.Thread):
     def __init__(self, lines) -> None:
         super().__init__(daemon=True)
@@ -42,12 +85,14 @@ class Reader(threading.Thread):
         self.buf: deque[tuple[float, str, str]] = deque()
         self.lock = threading.Lock()
         self.ended = False
+        self.count = 0
 
     def run(self) -> None:
         try:
             for t, link, line in self.lines:
                 with self.lock:
                     self.buf.append((t, link, line))
+                    self.count += 1
                     while t - self.buf[0][0] > 60:
                         self.buf.popleft()
         finally:
@@ -61,6 +106,11 @@ class Reader(threading.Thread):
         with self.lock:
             return [row for row in self.buf if a <= row[0] <= b]
 
+    def since(self, k: int) -> tuple[list[tuple[float, str, str]], int]:
+        with self.lock:
+            skip = max(0, k - (self.count - len(self.buf)))
+            return list(itertools.islice(self.buf, skip, None)), self.count
+
     def links(self) -> list[str]:
         with self.lock:
             return sorted({link for _, link, _ in self.buf})
@@ -68,9 +118,11 @@ class Reader(threading.Thread):
     def wait_first(self) -> None:
         self.wait_until(1.0)
 
-    def wait_until(self, target: float) -> None:
+    def wait_until(self, target: float, cut: threading.Event | None = None) -> bool:
         last_change, last = time.monotonic(), self.clock()
         while self.clock() < target:
+            if cut is not None and cut.is_set():
+                return False
             if self.ended:
                 sys.exit("The packet stream ended before the session finished.")
             time.sleep(0.02)
@@ -79,10 +131,11 @@ class Reader(threading.Thread):
             elif time.monotonic() - last_change > 3:
                 print("  (no packets for 3 s: is the SEND board powered?)", flush=True)
                 last_change = time.monotonic()
+        return True
 
 
 class View:
-    def __init__(self, port: int | None, cal: dict | None, label: str, n: int, link: str) -> None:
+    def __init__(self, port: int | None, cal: dict | None, label: str, n: int, link: str, voice: Speaker) -> None:
         self.hub = self.feed = None
         self.base = {"label": label, "n": n}
         self.link = link
@@ -90,6 +143,10 @@ class View:
         self.pending = cal
         self.failed = False
         self.t = 0.0
+        self.lock = threading.Lock()
+        self.asked = threading.Event()
+        self.busy = self.ended = self.closing = False
+        self.voice = voice
         if port is None:
             return
         try:
@@ -105,6 +162,7 @@ class View:
         print(f"Live view at {url}", flush=True)
         server.open_browser(url)
         self.hub, self.feed = hub, server.SignalFeed(hub)
+        hub.actions["calibrate"] = self.ask
 
     def watch(self, lines: Lines) -> Lines:
         return lines if self.hub is None else self._watch(lines)
@@ -132,8 +190,37 @@ class View:
             return
         self.feed.add(info, frame.rssi, frame.amp if info.amp is None else info.amp)
 
-    def calibrated(self, cal: dict) -> None:
-        self.pending = cal
+    def ask(self) -> bool:
+        with self.lock:
+            if self.busy or self.ended or self.failed or self.closing:
+                return False
+            if not self.asked.is_set():
+                self.asked.set()
+                self.record("calibrate_queued", self.t)
+                self.voice.say("Recalibrating before the next clip.")
+            return True
+
+    def last_clip(self) -> bool:
+        with self.lock:
+            self.closing = not self.asked.is_set()
+            return self.closing
+
+    def calibrating(self, t: float) -> None:
+        with self.lock:
+            self.busy = True
+            self.asked.clear()
+            self.record("calibrating", t, clip=0)
+
+    def calibrated(self, cal: dict, t: float) -> None:
+        with self.lock:
+            self.pending = cal
+            self.busy = False
+            self.record("calibrated", t, clip=0, links=sorted(cal))
+
+    def end(self, t: float, **fields) -> None:
+        with self.lock:
+            self.ended = True
+            self.record("done", t, **fields)
 
     def publish(self, msg: dict) -> None:
         if self.hub is None or self.failed:
@@ -147,6 +234,7 @@ class View:
         self.publish({"type": "record", "phase": phase, "t": t, **self.base, **fields})
 
     def close(self) -> None:
+        self.voice.close()
         if self.hub is not None:
             self.hub.close(1.0)
 
@@ -161,15 +249,80 @@ class View:
 
 
 def calibrate(reader: Reader, links: list[str]) -> dict[str, dict]:
-    trackers, fed_until = {link: MotionTracker(link) for link in links}, 0.0
+    trackers, fed_until, seen = {link: MotionTracker(link) for link in links}, reader.clock(), reader.count
     while any(tracker.calibration() is None for tracker in trackers.values()):
         reader.wait_until(fed_until + 0.5)
-        for t, link, line in reader.between(fed_until + 1e-9, float("inf")):
+        rows, seen = reader.since(seen)
+        for t, link, line in rows:
             frame = parse_line(line, t, link)
             if frame is not None and link in trackers:
                 trackers[link].update(frame)
             fed_until = t
     return {link: tracker.calibration() for link, tracker in trackers.items()}
+
+
+def calibrate_and_save(view: View, reader: Reader, links: list[str], cal_path: Path) -> dict[str, dict]:
+    while True:
+        print(f"Calibrating in {config.CALIBRATE_SETTLE_S:g} s: everyone out of the area and nobody moving, "
+              f"for {config.CALIBRATE_S:g} s...", flush=True)
+        view.calibrating(reader.clock())
+        view.voice.say("Calibrating. Everyone out, nobody move.", cut=False)
+        reader.wait_until(reader.clock() + config.CALIBRATE_SETTLE_S)
+        cal = calibrate(reader, links)
+        noisy = {link: c["noisy_frac"] for link, c in cal.items() if c["noisy_frac"] > MAX_NOISY_FRAC}
+        if not noisy:
+            break
+        worst = ", ".join(f"{f:.0%} on link {link}" for link, f in noisy.items())
+        print(f"  Something moved during {worst}. Trying again...", flush=True)
+    cal_path.write_text(json.dumps(
+        {"created_at": datetime.now().isoformat(timespec="minutes"), "calibration": cal}))
+    view.calibrated(cal, reader.clock())
+    view.voice.say("Calibrated.", cut=False)
+    print(f"Calibrated, saved to {cal_path}", flush=True)
+    return cal
+
+
+def session_args(ap: argparse.ArgumentParser) -> None:
+    ap.add_argument("--port", help="receiver A serial port")
+    ap.add_argument("--port-b", help="receiver B serial port")
+    ap.add_argument("--no-view", action="store_true", help="don't serve or open the live page")
+    ap.add_argument("--view-port", type=int, default=8000, help="port for the live page")
+    ap.add_argument("--no-voice", action="store_true", help="beep instead of speaking the cues")
+    ap.add_argument("--replay", help=argparse.SUPPRESS)
+    ap.add_argument("--root", type=Path, default=recordings.RECORDINGS, help=argparse.SUPPRESS)
+
+
+def open_session(args: argparse.Namespace, label: str, n: int,
+                 cal: dict | None) -> tuple[View, Reader, dict[str, str] | None]:
+    ports = None
+    if args.replay:
+        from backend.capture.replay import replay_lines
+        lines = replay_lines(args.replay, 1.0)
+    else:
+        from backend.capture.live import live_lines, receivers
+        ports = receivers(args.port, args.port_b)
+        lines = live_lines(ports)
+    view_link = DEFAULT_LINK if args.replay or DEFAULT_LINK in ports else min(ports)
+    view = View(None if args.no_view else args.view_port, cal, label, n, view_link, Speaker(not args.no_voice))
+    reader = Reader(view.watch(lines))
+    reader.start()
+    view.publish({"type": "source", "mode": "REPLAY" if args.replay else "LIVE"})
+    view.publish({"type": "config", "t_on": config.T_ON, "t_off": config.T_OFF,
+                  "pre_s": PRE_S, "post_s": POST_S, "calibrate_s": config.CALIBRATE_S,
+                  "calibrate_settle_s": config.CALIBRATE_SETTLE_S})
+    return view, reader, ports
+
+
+def heard_links(reader: Reader, ports: dict[str, str] | None, verb: str) -> list[str]:
+    reader.wait_first()
+    reader.wait_until(reader.clock() + 1.0)
+    links = reader.links()
+    if ports is not None and links != list(ports):
+        silent = ", ".join(link for link in ports if link not in links)
+        print(f"Receiver {silent} is plugged in but sends nothing; {verb.lower()} {', '.join(links)} only.",
+              flush=True)
+    print(f"{verb} link{'s' if len(links) > 1 else ''} {', '.join(links)}.", flush=True)
+    return links
 
 
 def main() -> None:
@@ -181,14 +334,9 @@ def main() -> None:
     ap.add_argument("--gap", type=float, default=8.0, help="seconds to get in position")
     ap.add_argument("--performer", default="vincent")
     ap.add_argument("--spot", default="test-room", help="where this was recorded")
-    ap.add_argument("--port", help="receiver A serial port")
-    ap.add_argument("--port-b", help="receiver B serial port")
     ap.add_argument("--recalibrate", action="store_true",
                     help="learn the calm room again (do this after moving the boards)")
-    ap.add_argument("--no-view", action="store_true", help="don't serve or open the live page")
-    ap.add_argument("--view-port", type=int, default=8000, help="port for the live page")
-    ap.add_argument("--replay", help=argparse.SUPPRESS)
-    ap.add_argument("--root", type=Path, default=recordings.RECORDINGS, help=argparse.SUPPRESS)
+    session_args(ap)
     args = ap.parse_args()
 
     cal_path = args.root.parent / recordings.CALIBRATION_FILE
@@ -196,33 +344,13 @@ def main() -> None:
     saved_cals = {link: cal for link, cal in recordings.per_link(saved["calibration"]).items()
                   if cal.get("measure") == MEASURE} if saved else {}
 
-    if args.replay:
-        from backend.capture.replay import replay_lines
-        lines = replay_lines(args.replay, 1.0)
-    else:
-        from backend.capture.live import live_lines, receivers
-        ports = receivers(args.port, args.port_b)
-        lines = live_lines(ports)
-    view_link = DEFAULT_LINK if args.replay or DEFAULT_LINK in ports else min(ports)
-    view = View(None if args.no_view else args.view_port,
-                saved_cals or None, args.label, args.n, view_link)
-    reader = Reader(view.watch(lines))
-    reader.start()
-    view.publish({"type": "source", "mode": "REPLAY" if args.replay else "LIVE"})
-    view.publish({"type": "config", "t_on": config.T_ON, "t_off": config.T_OFF,
-                  "pre_s": PRE_S, "post_s": POST_S, "calibrate_s": config.CALIBRATE_S})
+    view, reader, ports = open_session(args, args.label, args.n, saved_cals or None)
+    view.voice.prepare([*COUNT_WORDS.values(), GO_WORDS[args.label]])
 
     detector = ThresholdDetector()
     recorded, bad, finished = 0, 0, False
     try:
-        reader.wait_first()
-        reader.wait_until(reader.clock() + 1.0)
-        links = reader.links()
-        if not args.replay and links != list(ports):
-            silent = ", ".join(link for link in ports if link not in links)
-            print(f"Receiver {silent} is plugged in but sends nothing; recording {', '.join(links)} only.",
-                  flush=True)
-        print(f"Recording link{'s' if len(links) > 1 else ''} {', '.join(links)}.", flush=True)
+        links = heard_links(reader, ports, "Recording")
         if not args.recalibrate and all(link in saved_cals for link in links):
             cal = {link: saved_cals[link] for link in links}
             print(f"Using the calm-room calibration from {saved['created_at']} "
@@ -232,36 +360,39 @@ def main() -> None:
                 new = [link for link in links if link not in saved_cals]
                 print(f"No saved calibration for link{'s' if len(new) > 1 else ''} {', '.join(new)} yet.",
                       flush=True)
-            while True:
-                print("Calibrating: everyone out of the area and nobody moving, for 10 s...", flush=True)
-                view.record("calibrating", reader.clock(), clip=0)
-                cal = calibrate(reader, links)
-                noisy = {link: c["noisy_frac"] for link, c in cal.items() if c["noisy_frac"] > MAX_NOISY_FRAC}
-                if not noisy:
-                    break
-                worst = ", ".join(f"{f:.0%} on link {link}" for link, f in noisy.items())
-                print(f"  Something moved during {worst}. Trying again...", flush=True)
-            cal_path.write_text(json.dumps(
-                {"created_at": datetime.now().isoformat(timespec="minutes"), "calibration": cal}))
-            view.calibrated(cal)
-            print(f"Calibrated, saved to {cal_path}", flush=True)
+            cal = calibrate_and_save(view, reader, links, cal_path)
 
         for i in range(1, args.n + 1):
-            print(f"\nClip {i}/{args.n} [{args.label}]: get in position...", flush=True)
-            start = reader.clock()
-            until = start + max(0.0, args.gap - 3)
-            view.record("position", start, clip=i, until=until)
-            reader.wait_until(until)
+            while True:
+                if view.asked.is_set():
+                    print("\nRecalibrating, as asked on the live page.", flush=True)
+                    cal = calibrate_and_save(view, reader, links, cal_path)
+                print(f"\nClip {i}/{args.n} [{args.label}]: get in position...", flush=True)
+                view.voice.say(f"Clip {i} of {args.n}. Get in position.", cut=False)
+                start = reader.clock()
+                until = start + max(0.0, args.gap - 3)
+                view.record("position", start, clip=i, until=until)
+                if reader.wait_until(until, view.asked) and (i < args.n or view.last_clip()):
+                    break
             for word in ("3", "2", "1"):
                 t = reader.clock()
                 view.record("count", t, clip=i, word=word)
-                beep("Tink")
+                if view.voice.on:
+                    view.voice.say(COUNT_WORDS[word])
+                else:
+                    beep("Tink")
                 print(f"  {word}...", flush=True)
                 reader.wait_until(t + 1)
-            beep("Glass")
+            if view.voice.on:
+                view.voice.say(GO_WORDS[args.label])
+            else:
+                beep("Glass")
             print("  GO!", flush=True)
             go_t = reader.clock()
             view.record("go", go_t, clip=i)
+            if args.label in HOLD_WORDS:
+                reader.wait_until(go_t + HOLD_S)
+                view.voice.say(HOLD_WORDS[args.label])
             reader.wait_until(go_t + POST_S)
 
             clip = reader.between(go_t - PRE_S, go_t + POST_S)
@@ -284,6 +415,7 @@ def main() -> None:
                 seen = f"rules say {v.label} " + ", ".join(f"{k} {x}" for k, x in v.details.items())
             problems = rec.problems()
             beep("Basso" if problems else "Pop")
+            view.voice.say(f"{problems[0].split(' (')[0].capitalize()}. Do an extra." if problems else "Saved.")
             rates = ", ".join(f"{link} {hz} Hz" for link, hz in meta["rate_hz"].items())
             print(f"  saved {path.name} ({rates}): {seen}", flush=True)
             if problems:
@@ -295,12 +427,12 @@ def main() -> None:
 
         print(f"\nDone: {args.n} x {args.label} in {args.root / args.split}, "
               f"{args.n - bad} clean, {bad} flagged")
+        view.voice.say(f"Done. {args.n - bad} clean, {bad} flagged.", cut=False)
         finished = True
     except KeyboardInterrupt:
         print()
     finally:
-        view.record("done", reader.clock(), clip=recorded, clean=recorded - bad, flagged=bad,
-                    stopped=not finished)
+        view.end(reader.clock(), clip=recorded, clean=recorded - bad, flagged=bad, stopped=not finished)
         view.close()
 
 
