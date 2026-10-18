@@ -1,0 +1,17 @@
+{
+  "name": "fall-watch-messaging",
+  "private": true,
+  "type": "module",
+  "description": "Messaging sidecar: texts the dashboard's Check-ins and Alerts through Photon (docs/adr/0001)",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node sidecar.mjs",
+    "console": "node sidecar.mjs --console"
+  },
+  "dependencies": {
+    "@spectrum-ts/core": "^12.12.0",
+    "@spectrum-ts/imessage-local": "^12.11.0"
+  }
+}

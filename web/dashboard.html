@@ -1,0 +1,1248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fall Watch</title>
+<script type="importmap">
+{
+  "imports": {
+    "react": "/vendor/react.mjs",
+    "react/jsx-runtime": "/vendor/react-jsx-runtime.mjs",
+    "react-dom/client": "/vendor/react-dom-client.mjs",
+    "liquid-glass-react": "/vendor/liquid-glass-react.mjs"
+  }
+}
+</script>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="dashboard.css">
+<script type="module" src="vendor/model-viewer.min.js"></script>
+</head>
+<body class="friendly-page">
+<canvas class="bg-dots" id="bg" aria-hidden="true"></canvas>
+<template id="gator-tpl">
+  <svg class="gator" viewBox="0 0 240 150" data-mood="happy" aria-hidden="true">
+    <ellipse class="g-shadow" cx="122" cy="141" rx="104" ry="6"></ellipse>
+    <path class="g-skin" d="M72 108 C46 118 18 112 8 92 C24 102 46 100 68 90 Z"></path>
+    <path class="g-ridge" d="M66 82 l7 -11 l7 11 Z M82 76 l7 -12 l7 12 Z M98 74 l7 -12 l7 12 Z M114 76 l7 -11 l7 11 Z"></path>
+    <ellipse class="g-skin" cx="100" cy="106" rx="54" ry="32"></ellipse>
+    <ellipse class="g-belly" cx="104" cy="120" rx="40" ry="14"></ellipse>
+    <rect class="g-skin" x="70" y="118" width="16" height="20" rx="8"></rect>
+    <rect class="g-skin" x="118" y="118" width="16" height="20" rx="8"></rect>
+    <path class="g-skin" d="M124 66 C140 48 178 50 196 62 L226 72 C238 76 238 94 226 98 L156 106 C134 108 118 90 124 66 Z"></path>
+    <circle class="g-skin" cx="221" cy="72" r="7"></circle>
+    <circle class="g-nostril" cx="223" cy="70" r="2.5"></circle>
+    <circle class="g-skin" cx="152" cy="60" r="19"></circle>
+    <circle class="g-eye" cx="152" cy="58" r="12.5"></circle>
+    <circle class="g-pupil" cx="155" cy="60" r="6.5"></circle>
+    <circle class="g-shine" cx="157" cy="56" r="2.5"></circle>
+    <g class="g-brows"><path d="M139 41 L165 34"></path></g>
+    <ellipse class="g-blush" cx="168" cy="88" rx="9" ry="5"></ellipse>
+    <g class="g-mouth g-happy">
+      <path class="g-line" d="M150 92 Q186 106 228 88"></path>
+      <path class="g-tooth" d="M176 98 L180 106 L184 99 Z M194 98 L198 105 L202 96 Z M210 94 L213 101 L217 92 Z"></path>
+    </g>
+    <g class="g-mouth g-worried"><path class="g-line" d="M156 96 Q170 90 184 96 T214 94"></path></g>
+    <g class="g-mouth g-alarmed">
+      <path class="g-open" d="M152 92 Q190 90 228 86 Q214 112 172 108 Q156 104 152 92 Z"></path>
+      <path class="g-tooth" d="M182 90 L186 97 L190 89 Z M202 88 L206 95 L210 87 Z"></path>
+    </g>
+  </svg>
+</template>
+
+<header class="topbar">
+  <span class="brand"><img class="brand-logo" src="gator_side.png" alt="">Fall Watch</span>
+  <div class="toggle views" role="group" aria-label="View">
+    <span class="views-thumb" aria-hidden="true"></span>
+    <button type="button" data-view="caregiver">Caregiver</button>
+    <button type="button" data-view="resident">Resident</button>
+    <button type="button" data-view="dev">Dev</button>
+  </div>
+  <button type="button" class="chip simulate" id="simulate" disabled>Simulate fall</button>
+  <button type="button" class="chip sound" id="sound"></button>
+</header>
+
+<main class="care" id="caregiver">
+  <section class="care-card glass-card" id="cg-card" data-tone="calm" role="status" aria-live="polite">
+    <div class="care-gator" id="cg-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 22.5deg 130deg" camera-orbit="0deg 72deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
+    <div class="care-body">
+      <span class="care-pill" id="cg-pill">Watching</span>
+      <h1 class="care-word" id="cg-word">Connecting…</h1>
+      <p class="care-sub" id="cg-sub"></p>
+      <div class="care-timer" id="cg-timer" hidden>
+        <svg viewBox="0 0 120 120" aria-hidden="true">
+          <circle class="ring-track" cx="60" cy="60" r="52"></circle>
+          <circle class="ring-fill" id="cg-ring" cx="60" cy="60" r="52" pathLength="100"></circle>
+        </svg>
+        <span class="care-secs" id="cg-secs"></span>
+      </div>
+      <div class="care-actions">
+        <button type="button" class="pill-btn main" id="cg-cancel" hidden>Cancel the alert</button>
+        <button type="button" class="pill-btn main" id="cg-handled" hidden>I've handled it</button>
+        <button type="button" class="pill-btn" id="cg-false" hidden>It was a false alarm</button>
+        <a class="pill-btn" id="cg-call" hidden><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"></path></svg>Call them</a>
+      </div>
+    </div>
+  </section>
+  <section class="care-side">
+    <figure class="soft-card glass-card movement">
+      <header><h2>Movement in the room</h2><span class="soft-note" id="cg-move-note">last 20 seconds</span></header>
+      <div class="plot"><canvas id="cg-energy" role="img" aria-label="Average movement in the room over the last 20 seconds"></canvas></div>
+    </figure>
+    <figure class="soft-card glass-card activity">
+      <header><h2>Recent activity</h2></header>
+      <ol class="activity-list" id="cg-activity"></ol>
+      <p class="activity-empty" id="cg-empty">Nothing has happened yet. That's a good thing.</p>
+    </figure>
+  </section>
+</main>
+
+<main class="resident" id="resident" hidden>
+  <div class="resident-card glass-card" id="resident-card" data-tone="calm" role="status" aria-live="assertive">
+    <div class="resident-gator" id="res-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 22.5deg 130deg" camera-orbit="0deg 72deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
+    <div class="resident-word" id="resident-word">All good</div>
+    <div class="resident-sub" id="resident-sub">Fall Watch is on</div>
+    <div class="resident-buttons" id="resident-buttons" hidden>
+      <button type="button" class="big ok" id="res-ok">I'm OK</button>
+      <button type="button" class="big help" id="res-help">I need help</button>
+    </div>
+  </div>
+</main>
+
+<main class="dash" id="dev" hidden>
+  <section class="dash-left" aria-label="Fall Flow">
+    <div class="status glass-card" id="status" data-tone="idle" role="status" aria-live="polite">
+      <div class="status-head"><span>FALL WATCH</span><span class="status-tag" id="sim-tag" hidden>SIMULATED</span></div>
+      <div class="status-word" id="status-word">CONNECTING</div>
+      <div class="status-sub" id="status-sub"></div>
+      <div class="progress"><div class="progress-fill" id="status-progress"></div></div>
+    </div>
+    <div class="motion" id="motion" aria-label="Motion Level per Link"></div>
+    <div class="actions">
+      <button type="button" class="btn primary" id="cancel" hidden>Cancel Countdown</button>
+      <button type="button" class="btn primary" id="resolve-handled" hidden>Resolve: handled</button>
+      <button type="button" class="btn" id="resolve-false" hidden>Resolve: false alarm</button>
+      <a class="btn" id="call" hidden>Call the Resident</a>
+      <span class="actions-note" id="actions-note">No action needed</span>
+    </div>
+    <div class="pair">
+      <figure class="card glass-card room">
+        <header><h2>Room</h2><span class="note">top-down view</span></header>
+        <div class="plot">
+          <svg viewBox="0 0 320 250" role="img" aria-label="Room map with the sender and receivers A and B" id="map">
+            <rect class="wall" x="6" y="6" width="308" height="238" rx="10"></rect>
+            <line class="link-glow" id="glow-A" x1="160" y1="218" x2="50" y2="50"></line>
+            <line class="link-glow" id="glow-B" x1="160" y1="218" x2="270" y2="50"></line>
+            <line class="link-line" id="line-A" x1="160" y1="218" x2="50" y2="50"></line>
+            <line class="link-line" id="line-B" x1="160" y1="218" x2="270" y2="50"></line>
+            <rect class="board" x="38" y="38" width="24" height="24" rx="5"></rect>
+            <rect class="board" x="258" y="38" width="24" height="24" rx="5"></rect>
+            <rect class="board" x="148" y="206" width="24" height="24" rx="5"></rect>
+            <text x="22" y="28">A</text>
+            <text x="286" y="28" text-anchor="end">B</text>
+            <text x="180" y="226">Sender</text>
+            <text class="small" x="40" y="27" id="map-A">no data</text>
+            <text class="small" x="266" y="27" text-anchor="end" id="map-B">no data</text>
+          </svg>
+        </div>
+      </figure>
+      <figure class="card glass-card why">
+        <header><h2 id="why-title">Why it's a fall</h2></header>
+        <div class="why-body" id="why"></div>
+      </figure>
+    </div>
+  </section>
+  <section class="dash-right" aria-label="Live signal and history">
+    <div class="chips" id="chips">
+      <span class="chip" id="dev-source">–</span>
+      <span class="chip alert" id="stale" hidden></span>
+    </div>
+    <figure class="card glass-card wave">
+      <header>
+        <h2>Live signal</h2>
+        <span class="note" id="wave-note">8 subcarriers, flat = still, swings = movement</span>
+        <div class="toggle links" role="group" aria-label="Waveform link" id="wave-pick"></div>
+      </header>
+      <div class="plot"><canvas id="wave"></canvas></div>
+    </figure>
+    <figure class="card glass-card energy">
+      <header>
+        <h2>Motion energy</h2>
+        <span class="note">over T_ON starts a Motion Event; shaded = cut events</span>
+      </header>
+      <div class="energy-plots" id="energy-plots"></div>
+    </figure>
+    <figure class="card glass-card log">
+      <header>
+        <div class="toggle tabs" role="tablist" aria-label="Log">
+          <button type="button" role="tab" data-tab="live" aria-selected="true" aria-pressed="true">Live</button>
+          <button type="button" role="tab" data-tab="history" aria-selected="false" aria-pressed="false">History</button>
+        </div>
+        <span class="note" id="log-note">this run, newest first</span>
+      </header>
+      <ol class="events" id="events"></ol>
+      <ol class="events" id="history" hidden></ol>
+    </figure>
+  </section>
+</main>
+<div class="tip" id="tip" hidden></div>
+
+<script type="module">
+import { SignalBuffer, Waveform, EnergyChart, readTheme, watchTheme, connect, timeAtX } from "./signal.js";
+
+const $ = (id) => document.getElementById(id);
+const STALE_MS = 2000;
+const MAX_ROWS = 200;
+const BEEP_MS = 700;
+const LABELS = { fall: "FALL", walk: "walk", "sit-down": "sit-down" };
+const LOG_TEXT = { "Fall Candidate: stay still, deciding...": "Fall suspected: checking for movement…" };
+const NOTICE = {
+  check_in: "Check-in to the Resident", alert: "Alert to the Caregiver",
+  all_clear: "All-clear to the Caregiver", help: "Help Request to the Caregiver",
+};
+const DELIVERY = { sending: "sending…", sent: "✓ sent", failed: "✗ failed", not_delivered: "✗ not delivered" };
+const ICONS = {
+  alert: '<path d="M12 4 L21 19 H3 Z"></path><path d="M12 10v4"></path><path d="M12 16.5v.5"></path>',
+  message: '<path d="M4 5h16v11H10l-5 4v-4H4z"></path>',
+  bell: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"></path><path d="M10 20.5a2 2 0 0 0 4 0"></path>',
+  heart: '<path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20z"></path>',
+  cross: '<path d="M7 7l10 10"></path><path d="M17 7L7 17"></path>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"></path>',
+  help: '<circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5v5.5"></path><path d="M12 16v.5"></path>',
+  phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"></path>',
+};
+const FRIENDLY_DELIVERY = { sending: "sending…", sent: "delivered", failed: "couldn't send", not_delivered: "not delivered" };
+const HISTORY_TEXT = {
+  confirmed_fall: (e) => `Confirmed Fall #${e.fall} · link ${e.links}${e.details ? ` · peak ${e.details.peak} · room change ${e.details.static_change}` : ""}`,
+  alert: (e) => `Alert for fall #${e.fall}`,
+  countdown_cancelled: (e) => `Countdown cancelled by the ${e.by === "resident" ? "Resident (I'm OK)" : "Caregiver"} · fall #${e.fall}`,
+  late_answer: (e) => `Late Answer: the Resident is OK, ${e.late_s} s after the Alert · fall #${e.fall}`,
+  resolved: (e) => `Alert resolved: ${e.reason === "false_alarm" ? "false alarm" : "handled"} · fall #${e.fall}`,
+  help_request: (e) => `Help Request from the Resident · fall #${e.fall}`,
+  called: (e) => `Caregiver called the Resident${e.fall ? ` · fall #${e.fall}` : ""}`,
+  stale_answer: (e) => `Stale Answer ignored (${e.answer}${e.fall != null ? ` for fall #${e.fall}` : ""})`,
+};
+
+const links = new Map();
+const empty = new SignalBuffer();
+const wave = new Waveform($("wave"), empty);
+const avg = new SignalBuffer();
+const movement = new EnergyChart($("cg-energy"), avg);
+let theme = readTheme(document.body);
+let soft = readTheme($("caregiver"));
+let st = fresh();
+let conn = "connecting";
+let ever = false;
+let openedAt = performance.now();
+let pick = "auto";
+const asked = new URLSearchParams(location.search).get("view");
+let view = asked === "resident" || asked === "dev" ? asked : "caregiver";
+let tab = "live";
+let hover = null;
+let muted = false;
+let audio = null;
+let beepTimer = null;
+try {
+  muted = localStorage.getItem("dash-muted") === "1";
+} catch {}
+
+function fresh() {
+  return {
+    cfg: null, source: null, ended: false, state: null, stateAt: 0, alarm: false,
+    events: [], lastFall: null, lastVerdict: null, simTag: false,
+    notices: new Map(), historyRows: new Map(), activity: 0,
+  };
+}
+
+const MOOD_3D = {
+  happy: { spin: "24deg" },
+  worried: { spin: "70deg" },
+  alarmed: { spin: null, orbit: "0deg 72deg auto" },
+};
+const MODEL_COLORS = ["#2f7d4b", "#4caf6e"];
+const DEG = Math.PI / 180;
+const JAW_CLOSED = -12 * DEG;
+const JAW_WIDE = 24 * DEG;
+
+// The upper jaw is its own part in gator_case.glb. model-viewer has no public API for moving one
+// part, so this reaches its three.js scene (internal, pinned by the vendored 4.0.0 build) and
+// turns the jaw around the back of its bottom edge, where the CAD's pegs hold it.
+function findJaw(mv) {
+  const sym = Object.getOwnPropertySymbols(mv).find((s) => s.description === "scene");
+  const scene = sym && mv[sym];
+  const jaw = scene && scene.getObjectByName && scene.getObjectByName("gator_upper_jaw");
+  if (!jaw || !jaw.geometry) return null;
+  jaw.geometry.computeBoundingBox();
+  const box = jaw.geometry.boundingBox;
+  const V = jaw.position.constructor;
+  const Q = jaw.quaternion.constructor;
+  return {
+    scene, jaw, V, Q, angle: 0,
+    hinge: new V(0, box.min.y, box.max.z),
+    p0: jaw.position.clone(),
+    q0: jaw.quaternion.clone(),
+  };
+}
+
+const JAW_SMOOTH_S = 0.12;
+const JAW_CYCLE = {
+  happy: { period: 4, open: 14 * DEG },
+  worried: { period: 2, open: 20 * DEG },
+  alarmed: { period: 2, open: JAW_WIDE },
+};
+
+function jawTarget(mood, t) {
+  if (calmMotion.matches) return mood === "alarmed" ? JAW_WIDE : 0;
+  const c = JAW_CYCLE[mood] ?? JAW_CYCLE.happy;
+  const wave = (1 - Math.cos((2 * Math.PI * t) / c.period)) / 2;
+  const s = Math.max(0, (wave - 0.12) / 0.88);
+  return JAW_CLOSED + s * (c.open - JAW_CLOSED);
+}
+
+function moveJaw(mv, t) {
+  const j = mv._jaw;
+  if (!j || mv.hidden) return;
+  const target = jawTarget(mv.dataset.mood || "happy", t);
+  const dt = j.t == null ? 1 : Math.min(1, Math.max(0, t - j.t));
+  j.t = t;
+  const next = j.angle + (target - j.angle) * (1 - Math.exp(-dt / JAW_SMOOTH_S));
+  if (Math.abs(next - j.angle) < 1e-4) return;
+  j.angle = next;
+  const turn = new j.Q().setFromAxisAngle(new j.V(1, 0, 0), j.angle);
+  j.jaw.quaternion.copy(j.q0).multiply(turn);
+  const swing = j.hinge.clone().sub(j.hinge.clone().applyQuaternion(turn)).applyQuaternion(j.q0);
+  j.jaw.position.copy(j.p0).add(swing);
+  j.scene.queueRender();
+}
+const pageStart = performance.now();
+
+function flatGator(box, mood) {
+  if (!box.firstElementChild) box.append($("gator-tpl").content.firstElementChild.cloneNode(true));
+  const svg = box.firstElementChild;
+  if (svg.dataset.mood !== mood) svg.dataset.mood = mood;
+}
+
+function setModel(mv, mood) {
+  if (!mv.loaded || mv.dataset.mood === mood) return;
+  mv.dataset.mood = mood;
+  const m = MOOD_3D[mood];
+  if (m.spin) {
+    mv.rotationPerSecond = m.spin;
+    mv.autoRotate = true;
+  } else {
+    mv.autoRotate = false;
+    mv.cameraOrbit = m.orbit;
+  }
+}
+
+function gator(host, mood) {
+  if (host.dataset.mood !== mood) host.dataset.mood = mood;
+  const mv = host.querySelector("model-viewer");
+  const flat = host.querySelector(".gator2d");
+  if (!mv) {
+    flatGator(host, mood);
+    return;
+  }
+  const defined = !!customElements.get("model-viewer");
+  if (defined && !mv.dataset.failed) {
+    show(mv, true);
+    show(flat, false);
+    setModel(mv, mood);
+    return;
+  }
+  const waiting = !mv.dataset.failed && performance.now() - pageStart < 4000;
+  show(mv, false);
+  show(flat, !waiting);
+  if (!waiting) flatGator(flat, mood);
+}
+
+for (const mv of document.querySelectorAll("model-viewer")) {
+  mv.addEventListener("load", () => {
+    delete mv.dataset.mood;
+    try {
+      mv._jaw = findJaw(mv);
+    } catch {
+      mv._jaw = null;
+    }
+    (mv.model?.materials ?? []).forEach((material, i) => {
+      material.pbrMetallicRoughness.setBaseColorFactor(MODEL_COLORS[Math.min(i, MODEL_COLORS.length - 1)]);
+    });
+  });
+  mv.addEventListener("error", () => (mv.dataset.failed = "1"));
+}
+
+const bg = $("bg");
+const bgCtx = bg.getContext("2d");
+const DOT_COLORS = ["18,84,46", "31,122,67", "47,125,75", "76,175,110", "112,196,140", "160,214,170"];
+const calmMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const dots = [];
+const AVOID_RADIUS = 150;
+const AVOID_PUSH = 40;
+const AVOID_EASE = 0.08;
+const pointer = { x: 0, y: 0, tx: 0, ty: 0, px: -1e4, py: -1e4 };
+
+function seedDots() {
+  dots.length = 0;
+  const n = Math.min(300, Math.round((innerWidth * innerHeight) / 5200));
+  for (let i = 0; i < n; i++) {
+    dots.push({
+      x: Math.random() * 2 - 1, y: Math.random() * 2 - 1, z: Math.random() * 2 - 1,
+      c: DOT_COLORS[i % DOT_COLORS.length], s: 0.6 + Math.random() * 0.9,
+      phase: Math.random() * Math.PI * 2, ox: 0, oy: 0,
+    });
+  }
+}
+
+function drawBg(nowMs) {
+  if (view === "dev" || document.hidden) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = innerWidth;
+  const h = innerHeight;
+  if (bg.width !== Math.round(w * dpr) || bg.height !== Math.round(h * dpr)) {
+    bg.width = Math.round(w * dpr);
+    bg.height = Math.round(h * dpr);
+    seedDots();
+  }
+  bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  bgCtx.clearRect(0, 0, w, h);
+  const t = calmMotion.matches ? 0 : nowMs / 1000;
+  pointer.x += (pointer.tx - pointer.x) * 0.04;
+  pointer.y += (pointer.ty - pointer.y) * 0.04;
+  const yaw = t * 0.02 + pointer.x * 0.3;
+  const pitch = -0.18 + pointer.y * 0.18;
+  const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+  for (const d of dots) {
+    const bob = calmMotion.matches ? 0 : Math.sin(t * 0.6 + d.phase) * 0.02;
+    const x1 = d.x * cy - d.z * sy;
+    const z1 = d.x * sy + d.z * cy;
+    const y1 = (d.y + bob) * cp - z1 * sp;
+    const z2 = (d.y + bob) * sp + z1 * cp;
+    const persp = 1.6 / (z2 + 2.6);
+    const bx = w / 2 + x1 * persp * w * 0.95;
+    const by = h / 2 + y1 * persp * h * 1.05;
+    const dx = bx - pointer.px;
+    const dy = by - pointer.py;
+    const dist = Math.hypot(dx, dy);
+    let tx = 0;
+    let ty = 0;
+    if (dist < AVOID_RADIUS && dist > 0.1) {
+      const k = 1 - dist / AVOID_RADIUS;
+      const falloff = k * k * (3 - 2 * k);
+      tx = (dx / dist) * falloff * AVOID_PUSH * persp;
+      ty = (dy / dist) * falloff * AVOID_PUSH * persp;
+    }
+    d.ox += (tx - d.ox) * AVOID_EASE;
+    d.oy += (ty - d.oy) * AVOID_EASE;
+    const px = bx + d.ox;
+    const py = by + d.oy;
+    const alpha = Math.min(0.5, Math.max(0.1, (persp - 0.3) * 0.8));
+    bgCtx.fillStyle = `rgba(${d.c},${alpha.toFixed(3)})`;
+    bgCtx.beginPath();
+    bgCtx.arc(px, py, d.s * persp * 2, 0, Math.PI * 2);
+    bgCtx.fill();
+  }
+}
+
+addEventListener("pointermove", (e) => {
+  pointer.tx = (e.clientX / innerWidth) * 2 - 1;
+  pointer.ty = (e.clientY / innerHeight) * 2 - 1;
+  pointer.px = e.clientX;
+  pointer.py = e.clientY;
+});
+document.addEventListener("pointerleave", () => {
+  pointer.px = pointer.py = -1e4;
+});
+
+function linkFor(name) {
+  let l = links.get(name);
+  if (l) return l;
+  const buf = new SignalBuffer();
+  const plot = document.createElement("div");
+  plot.className = "plot";
+  plot.hidden = true;
+  const tag = document.createElement("span");
+  tag.className = "plot-tag";
+  tag.textContent = `link ${name}`;
+  const canvas = document.createElement("canvas");
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute("aria-label", `Motion energy of link ${name}`);
+  plot.append(tag, canvas);
+  const names = [...links.keys(), name].sort();
+  $("energy-plots").insertBefore(plot, $("energy-plots").children[names.indexOf(name)] ?? null);
+  l = { name, buf, arrival: null, movedAt: null, plot, chart: new EnergyChart(canvas, buf) };
+  links.set(name, l);
+  renderPicker();
+  return l;
+}
+
+const isFresh = (l, nowMs) => l.arrival != null && nowMs - l.arrival < STALE_MS;
+
+function clock(t) {
+  return new Date(t * 1000).toLocaleTimeString([], { hour12: false });
+}
+
+function shortClock(t) {
+  return new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function day(t) {
+  return new Date(t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+}
+
+function friendlyDay(t) {
+  const d = new Date(t * 1000);
+  const today = new Date();
+  const time = shortClock(t);
+  if (d.toDateString() === today.toDateString()) return time;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+}
+
+function pushAverage(t, nowMs) {
+  const live = [...links.values()].filter((l) => isFresh(l, nowMs) && l.buf.latest()?.energy != null);
+  if (!live.length) return;
+  const energy = live.reduce((sum, l) => sum + l.buf.latest().energy, 0) / live.length;
+  const moving = live.some((l) => l.buf.latest().level === "moving");
+  avg.push({ t, energy, level: moving ? "moving" : "still" }, nowMs);
+}
+
+function onMessage(msg) {
+  if (msg.type === "frame") {
+    const l = linkFor(msg.link ?? "A");
+    l.arrival = performance.now();
+    const f = l.buf.push(msg, l.arrival);
+    if (f && f.level === "moving") l.movedAt = f.t;
+    if (f) pushAverage(f.t, l.arrival);
+  } else if (msg.type === "source") {
+    st.source = msg.mode;
+    st.ended = !!msg.ended;
+  } else if (msg.type === "config") {
+    st.cfg = msg;
+    for (const name of msg.links ?? []) linkFor(name);
+  } else if (msg.type === "state") {
+    if (msg.sim) st.simTag = true;
+    else if (msg.state === "IDLE") st.simTag = false;
+    st.state = msg;
+    st.stateAt = performance.now();
+  } else if (msg.type === "alarm") st.alarm = !!msg.on;
+  else if (msg.type === "event") onEvent(msg);
+  else if (msg.type === "log") {
+    if (!msg.text.startsWith("Motion Event:")) addRow($("events"), msg.t, null, LOG_TEXT[msg.text] ?? msg.text, "note");
+  } else if (msg.type === "notify") onNotify(msg);
+  else if (msg.type === "delivery") onDelivery(msg);
+  else if (msg.type === "history") onHistory(msg);
+}
+
+function onState(s) {
+  conn = s;
+  if (s !== "open") return;
+  ever = true;
+  st = fresh();
+  for (const l of links.values()) {
+    l.buf.reset(0);
+    l.arrival = l.movedAt = null;
+  }
+  avg.reset(0);
+  for (const id of ["events", "history", "cg-activity"]) $(id).replaceChildren();
+  renderWhy();
+  openedAt = performance.now();
+}
+
+function onEvent(ev) {
+  st.events.push(ev);
+  if (st.events.length > MAX_ROWS) st.events.shift();
+  st.lastVerdict = ev;
+  if (ev.label === "fall") st.lastFall = ev;
+  const d = ev.details;
+  const parts = [];
+  if (d.peak != null) parts.push(`peak ${d.peak}`, `room change ${d.static_change}`);
+  if (d.duration_s != null) parts.push(`${d.duration_s} s`);
+  parts.push(`link ${ev.links}`);
+  if (ev.why === "moved_again") parts.push("moved again, so not a fall");
+  if (ev.why === "cut_short") parts.push("kept moving, so not a fall");
+  if (ev.confidence < 1 && ev.why === "classified") parts.push(`confidence ${ev.confidence}`);
+  if (ev.sim) parts.push("simulated");
+  addRow($("events"), ev.t, ev.label, parts.join(" · "), "event");
+  renderWhy();
+}
+
+function noticeText(n, status) {
+  return `${NOTICE[n.kind] ?? n.kind} · ${DELIVERY[status] ?? status}`;
+}
+
+function onNotify(n) {
+  const row = addRow($("events"), n.t, null, noticeText(n, n.status), "note notice");
+  row.dataset.status = n.status;
+  st.notices.set(n.id, { n, row });
+}
+
+function onDelivery(d) {
+  const known = st.notices.get(d.id);
+  if (known) {
+    known.row.dataset.status = d.status;
+    known.row.lastChild.textContent = noticeText(known.n, d.status);
+  }
+  const hist = st.historyRows.get(d.id);
+  if (!hist) return;
+  hist.row.dataset.status = d.status;
+  hist.row.lastChild.textContent = noticeText(hist.e, d.status) + hist.suffix;
+  if (hist.care) {
+    hist.care.dataset.status = d.status;
+    hist.care.querySelector(".act-status").textContent = FRIENDLY_DELIVERY[d.status] ?? d.status;
+  }
+}
+
+function who() {
+  return (st.cfg && st.cfg.resident_name) || "";
+}
+
+function friendly(e) {
+  const name = who();
+  const they = name || "They";
+  const them = name || "them";
+  switch (e.what) {
+    case "confirmed_fall": return { icon: "alert", tone: "bad", text: name ? `A fall was detected for ${name}` : "A fall was detected" };
+    case "notify":
+      if (e.kind === "check_in") return { icon: "message", tone: "info", text: `Asked ${them} “Are you OK?”`, status: true };
+      if (e.kind === "alert") return { icon: "bell", tone: "bad", text: "You were alerted", status: true };
+      return null;
+    case "countdown_cancelled":
+      return e.by === "resident"
+        ? { icon: "heart", tone: "good", text: `${they} said they're OK` }
+        : { icon: "cross", tone: "info", text: "You cancelled the alert" };
+    case "late_answer": return { icon: "heart", tone: "good", text: `${they} said they're OK (after the alert)` };
+    case "resolved":
+      return e.reason === "false_alarm"
+        ? { icon: "check", tone: "info", text: "You marked it a false alarm" }
+        : { icon: "check", tone: "good", text: "You marked it handled" };
+    case "help_request": return { icon: "help", tone: "bad", text: `${they} asked for help` };
+    case "called": return { icon: "phone", tone: "info", text: `You called ${them}` };
+    default: return null;
+  }
+}
+
+function addActivity(e) {
+  const f = friendly(e);
+  if (!f) return null;
+  const li = document.createElement("li");
+  li.dataset.tone = f.tone;
+  const icon = document.createElement("span");
+  icon.className = "act-icon";
+  icon.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[f.icon]}</svg>`;
+  const body = document.createElement("div");
+  body.className = "act-body";
+  const text = document.createElement("span");
+  text.className = "act-text";
+  text.textContent = f.text;
+  const meta = document.createElement("span");
+  meta.className = "act-meta";
+  const when = document.createElement("span");
+  when.textContent = friendlyDay(e.t);
+  meta.append(when);
+  if (f.status) {
+    const status = document.createElement("span");
+    status.className = "act-status";
+    status.textContent = FRIENDLY_DELIVERY[e.status] ?? e.status;
+    meta.append(status);
+    li.dataset.status = e.status;
+  }
+  body.append(text, meta);
+  li.append(icon, body);
+  const list = $("cg-activity");
+  list.prepend(li);
+  while (list.children.length > 60) list.lastChild.remove();
+  $("cg-empty").hidden = true;
+  return li;
+}
+
+function onHistory(e) {
+  if (e.what === "delivery") {
+    onDelivery(e);
+    return;
+  }
+  const care = addActivity(e);
+  if (e.what === "alert") return;
+  let text;
+  let label = null;
+  if (e.what === "notify") text = noticeText(e, e.status);
+  else if (HISTORY_TEXT[e.what]) text = HISTORY_TEXT[e.what](e);
+  else text = e.what;
+  if (e.what === "confirmed_fall") label = "fall";
+  const suffix = e.mode && e.mode !== "live" ? ` · ${e.mode === "sim" ? "simulated" : "replay"}` : "";
+  const row = addRow($("history"), e.t, label, text + suffix, label ? "event" : "note", day);
+  if (e.what === "notify") {
+    row.dataset.status = e.status;
+    st.historyRows.set(e.id, { e, row, suffix, care });
+  }
+}
+
+function addRow(list, t, label, text, kind, when = clock) {
+  const li = document.createElement("li");
+  li.className = kind;
+  const time = document.createElement("span");
+  time.className = "time";
+  time.textContent = when(t);
+  const pill = document.createElement("span");
+  if (label) {
+    pill.className = "pill";
+    pill.dataset.label = label;
+    pill.textContent = LABELS[label] ?? label;
+  }
+  const body = document.createElement("span");
+  body.className = "nums";
+  body.textContent = text;
+  li.append(time, pill, body);
+  list.prepend(li);
+  while (list.children.length > MAX_ROWS) list.lastChild.remove();
+  return li;
+}
+
+function bar(label, value, limit, unit) {
+  const row = document.createElement("div");
+  row.className = "why-row";
+  const pass = value >= limit;
+  row.dataset.pass = String(pass);
+  const top = Math.max(limit * 2, value * 1.1);
+  const head = document.createElement("div");
+  head.className = "why-label";
+  const name = document.createElement("span");
+  name.textContent = label;
+  const val = document.createElement("span");
+  const b = document.createElement("b");
+  b.textContent = String(value);
+  const mark = document.createElement("span");
+  mark.className = "verdict-mark";
+  mark.textContent = pass ? ` ≥ ${limit} ✓` : ` < ${limit} ✗`;
+  val.append(b, mark);
+  head.append(name, val);
+  const track = document.createElement("div");
+  track.className = "bar";
+  const fill = document.createElement("div");
+  fill.className = "bar-fill";
+  fill.style.width = `${Math.min(100, (value / top) * 100).toFixed(1)}%`;
+  const tick = document.createElement("div");
+  tick.className = "bar-mark";
+  tick.style.left = `${((limit / top) * 100).toFixed(1)}%`;
+  const tickLabel = document.createElement("span");
+  tickLabel.textContent = unit;
+  tick.append(tickLabel);
+  track.append(fill, tick);
+  row.append(head, track);
+  return row;
+}
+
+function para(cls, text) {
+  const p = document.createElement("div");
+  p.className = cls;
+  p.textContent = text;
+  return p;
+}
+
+function renderWhy() {
+  const box = $("why");
+  const cfg = st.cfg;
+  const ev = st.lastFall ?? st.lastVerdict;
+  $("why-title").textContent = !ev || ev.label === "fall" ? "Why it's a fall" : "Why it's not a fall";
+  if (!ev || !cfg) {
+    const rule = cfg ? `peak ≥ ${cfg.t_fall} and room change ≥ ${cfg.t_static}` : "a hard movement and a changed room";
+    box.replaceChildren(para("why-empty", `No Motion Event yet. A fall needs ${rule}, then ${cfg ? cfg.stillness_s : 4} s without movement.`));
+    return;
+  }
+  const d = ev.details;
+  const rows = [para("why-meta", `${clock(ev.t)} · link ${ev.links} · ${LABELS[ev.label] ?? ev.label}${ev.sim ? " · simulated" : ""}`)];
+  if (d.peak != null) {
+    rows.push(bar("Peak motion energy", d.peak, cfg.t_fall, "T_FALL"));
+    rows.push(bar("Room Change (static_change)", d.static_change, cfg.t_static, "T_STATIC"));
+  }
+  let foot;
+  if (ev.why === "moved_again") foot = `Moved again within the ${cfg.stillness_s} s Stillness Window, so not a fall.`;
+  else if (ev.why === "cut_short") foot = "Kept moving for 8 s, so it was walking, not a fall.";
+  else if (cfg.detector !== "threshold") {
+    foot = `The random forest decided ${ev.label} (confidence ${ev.confidence}); the thresholds are shown for reference.`;
+  } else if (ev.label === "fall") {
+    foot = `A hard movement, the room looks different afterwards (someone on the floor), and ${cfg.stillness_s} s without moving.`;
+  } else {
+    const low = [];
+    if (d.peak < cfg.t_fall) low.push(`peak ${d.peak} is under ${cfg.t_fall}`);
+    if (d.static_change < cfg.t_static) low.push(`room change ${d.static_change} is under ${cfg.t_static}`);
+    foot = `Not a fall: ${low.join(" and ")}.`;
+  }
+  rows.push(para("why-foot", foot));
+  box.replaceChildren(...rows);
+}
+
+function serverNow(nowMs) {
+  return st.state ? st.state.now + (nowMs - st.stateAt) / 1000 : null;
+}
+
+function flowState() {
+  return st.state ? st.state.state : "IDLE";
+}
+
+function timeLeft(nowMs) {
+  const now = serverNow(nowMs);
+  if (!st.state || st.state.deadline == null || now == null) return null;
+  const span = Math.max(0.1, st.state.deadline - st.state.t);
+  const left = Math.max(0, st.state.deadline - now);
+  return { left, span, secs: Math.ceil(left) };
+}
+
+function liveLinks(nowMs) {
+  return [...links.values()].filter((l) => isFresh(l, nowMs));
+}
+
+function statusFor(nowMs) {
+  if (conn !== "open") {
+    return ever ? { tone: "idle", word: "DISCONNECTED", sub: "run.py stopped? check the terminal" }
+      : { tone: "idle", word: "CONNECTING", sub: "" };
+  }
+  const s = flowState();
+  const tl = timeLeft(nowMs);
+  if (s === "FALL_CANDIDATE" && tl) {
+    return { tone: "candidate", word: "FALL SUSPECTED", sub: `checking for movement… ${tl.secs} s`, progress: 1 - tl.left / tl.span };
+  }
+  if (s === "COUNTDOWN" && tl) {
+    return { tone: "countdown", word: "FALL DETECTED", sub: `Check-in sent · Alert in ${tl.secs} s`, progress: tl.left / tl.span };
+  }
+  if (s === "ALERTED") return { tone: "alerted", word: "CAREGIVER ALERTED", sub: `at ${clock(st.state.t)} · resolve when handled` };
+  const live = liveLinks(nowMs);
+  if (live.some((l) => l.buf.latest()?.level === "calibrating")) {
+    return { tone: "calibrating", word: "CALIBRATING", sub: "keep the area still for 10 s" };
+  }
+  if (st.state && st.state.sim) return { tone: "idle", word: "ALL QUIET", sub: "Simulated Fall playing…" };
+  if (!live.length) {
+    return { tone: "idle", word: "ALL QUIET", sub: st.ended ? "replay finished · Simulate fall still works" : "waiting for packets" };
+  }
+  return { tone: "idle", word: "ALL QUIET", sub: "no fall in progress" };
+}
+
+function setText(el, text) {
+  if (el.textContent !== text) el.textContent = text;
+}
+
+function show(el, on) {
+  if (el.hidden === on) el.hidden = !on;
+}
+
+function callLink(el) {
+  const phone = st.cfg && st.cfg.resident_phone;
+  if (phone && el.getAttribute("href") !== `tel:${phone}`) el.setAttribute("href", `tel:${phone}`);
+  return !!phone;
+}
+
+function renderStatus(nowMs) {
+  const c = statusFor(nowMs);
+  const box = $("status");
+  if (box.dataset.tone !== c.tone) box.dataset.tone = c.tone;
+  setText($("status-word"), c.word);
+  setText($("status-sub"), c.sub);
+  $("status-progress").style.width = `${(Math.min(1, Math.max(0, c.progress ?? 0)) * 100).toFixed(1)}%`;
+  $("sim-tag").hidden = !st.simTag;
+  const s = flowState();
+  const open = conn === "open";
+  const phone = callLink($("call"));
+  show($("cancel"), open && s === "COUNTDOWN");
+  show($("resolve-handled"), open && s === "ALERTED");
+  show($("resolve-false"), open && s === "ALERTED");
+  show($("call"), open && phone && (s === "COUNTDOWN" || s === "ALERTED"));
+  show($("actions-note"), !open || (s !== "COUNTDOWN" && s !== "ALERTED"));
+  setText($("actions-note"), s === "FALL_CANDIDATE" ? "Waiting for the Stillness Window" : "No action needed");
+}
+
+function careFor(nowMs) {
+  const name = who();
+  if (conn !== "open") {
+    return ever
+      ? { tone: "offline", mood: "worried", pill: "Offline", word: "We lost the connection", sub: "Trying to reconnect…" }
+      : { tone: "calm", mood: "happy", pill: "Starting", word: "Connecting…", sub: "" };
+  }
+  if (!st.state) return { tone: "calm", mood: "happy", pill: "Starting", word: "Connecting…", sub: "" };
+  const s = flowState();
+  const tl = timeLeft(nowMs);
+  if (s === "FALL_CANDIDATE") {
+    return { tone: "watch", mood: "worried", pill: "Checking", word: "Possible fall", sub: "Checking whether it was a fall…", timer: tl, fill: tl ? 1 - tl.left / tl.span : 0 };
+  }
+  if (s === "COUNTDOWN") {
+    return {
+      tone: "urgent", mood: "worried", pill: "Fall detected", word: name ? `${name} may have fallen` : "A fall was detected",
+      sub: `We asked ${name ? `if ${name} is` : "if they're"} OK. You'll be alerted if there's no answer.`, timer: tl, fill: tl ? tl.left / tl.span : 0,
+    };
+  }
+  if (s === "ALERTED") {
+    return {
+      tone: "alert", mood: "alarmed", pill: "Needs you", word: name ? `${name} needs help` : "They may need help",
+      sub: `A fall at ${shortClock(st.state.t)} and no answer. Please check on ${name || "them"}.`,
+    };
+  }
+  const live = liveLinks(nowMs);
+  if (live.some((l) => l.buf.latest()?.level === "calibrating")) {
+    return { tone: "calm", mood: "happy", pill: "Getting ready", word: "Getting ready", sub: "Learning what the empty room looks like…" };
+  }
+  if (!live.length && !(st.state && st.state.sim)) {
+    return st.ended
+      ? { tone: "calm", mood: "happy", pill: "Watching", word: "All is well", sub: "The room is calm. No falls detected." }
+      : { tone: "offline", mood: "worried", pill: "Sensors offline", word: "Can't see the room", sub: "No signal from the sensors. Are they plugged in?" };
+  }
+  const moving = live.some((l) => l.buf.latest()?.level === "moving");
+  return { tone: "calm", mood: "happy", pill: "Watching", word: "All is well", sub: moving ? "Someone is moving around. Everything looks normal." : "The room is calm. No falls detected." };
+}
+
+function renderCare(nowMs) {
+  const c = careFor(nowMs);
+  const card = $("cg-card");
+  if (card.dataset.tone !== c.tone) card.dataset.tone = c.tone;
+  gator($("cg-gator"), c.mood);
+  setText($("cg-pill"), c.pill);
+  setText($("cg-word"), c.word);
+  setText($("cg-sub"), c.sub);
+  show($("cg-timer"), !!c.timer);
+  if (c.timer) {
+    setText($("cg-secs"), String(c.timer.secs));
+    $("cg-ring").style.strokeDasharray = `${(Math.min(1, Math.max(0, c.fill)) * 100).toFixed(1)} 100`;
+  }
+  const s = flowState();
+  const open = conn === "open";
+  const phone = callLink($("cg-call"));
+  show($("cg-cancel"), open && s === "COUNTDOWN");
+  show($("cg-handled"), open && s === "ALERTED");
+  show($("cg-false"), open && s === "ALERTED");
+  show($("cg-call"), open && phone && (s === "COUNTDOWN" || s === "ALERTED"));
+  const f = avg.latest();
+  setText($("cg-move-note"), f && liveLinks(nowMs).length ? (f.level === "moving" ? "moving now" : "calm now") : "last 20 seconds");
+}
+
+function renderMotion(nowMs) {
+  const box = $("motion");
+  for (const l of [...links.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+    let pill = box.querySelector(`[data-link="${l.name}"]`);
+    if (!pill) {
+      pill = document.createElement("span");
+      pill.className = "chip";
+      pill.dataset.link = l.name;
+      pill.innerHTML = '<span class="dot"></span><span></span>';
+      box.append(pill);
+    }
+    const f = isFresh(l, nowMs) ? l.buf.latest() : null;
+    const level = f ? f.level : "";
+    if (pill.dataset.level !== level) pill.dataset.level = level;
+    let text = `${l.name} · no data`;
+    if (f) text = `${l.name} · ${f.level}${f.energy != null ? ` ${f.energy.toFixed(1)}×` : ""}`;
+    setText(pill.lastChild, text);
+  }
+}
+
+function renderMap(nowMs) {
+  const s = flowState();
+  for (const name of ["A", "B"]) {
+    const l = links.get(name);
+    const f = l && isFresh(l, nowMs) ? l.buf.latest() : null;
+    let status = f ? (f.level === "moving" ? "moving" : "quiet") : "none";
+    if (s === "COUNTDOWN" || s === "ALERTED") {
+      if (st.lastFall && st.lastFall.links.split("+").includes(name)) status = "event";
+    } else if (s === "FALL_CANDIDATE" && l && l.movedAt != null && l.movedAt >= st.state.t - 10) status = "candidate";
+    const line = $(`line-${name}`);
+    if (line.dataset.status !== status) line.dataset.status = status;
+    const glow = $(`glow-${name}`);
+    const on = status === "moving" || status === "event" || status === "candidate" ? status : "";
+    if (glow.dataset.on !== on) glow.dataset.on = on;
+    let text = "no data";
+    if (f) text = f.energy != null ? `${f.energy.toFixed(1)}× ${f.level}` : f.level;
+    setText($(`map-${name}`), text);
+  }
+}
+
+function renderChips(nowMs) {
+  setText($("dev-source"), st.source ? (st.ended ? `${st.source} · ended` : st.source) : "–");
+  for (const l of links.values()) {
+    let chip = $(`chip-${l.name}`);
+    if (!chip) {
+      chip = document.createElement("span");
+      chip.className = "chip";
+      chip.id = `chip-${l.name}`;
+      $("chips").insertBefore(chip, $("stale"));
+    }
+    const f = isFresh(l, nowMs) ? l.buf.latest() : null;
+    const hz = f && f.hz != null ? `${f.hz.toFixed(0)} packets/s` : "";
+    setText(chip, f ? `${l.name} · ${[hz, `${f.rssi} dBm`].filter(Boolean).join(" · ")}` : `${l.name} · no data`);
+  }
+  const stale = $("stale");
+  let text = "";
+  if (ever && conn !== "open") text = "Lost the connection to run.py, retrying";
+  else if (conn === "open" && !st.ended) {
+    const last = Math.max(openedAt, ...[...links.values()].map((l) => l.arrival ?? 0));
+    const since = nowMs - last;
+    if (since > STALE_MS) text = `No packets for ${Math.floor(since / 1000)} s: is the SEND board powered?`;
+  }
+  stale.hidden = !text;
+  setText(stale, text);
+}
+
+function renderResident(nowMs) {
+  const s = flowState();
+  const tl = timeLeft(nowMs);
+  let tone = "calm";
+  let mood = "happy";
+  let word = "All good";
+  let sub = conn === "open" ? "Fall Watch is looking out for you" : "Connecting…";
+  let buttons = false;
+  if (conn === "open" && s === "COUNTDOWN") {
+    tone = "ask";
+    mood = "worried";
+    word = "Are you OK?";
+    sub = tl ? `If you don't answer, your caregiver will be told in ${tl.secs} s` : "Your caregiver will be told soon";
+    buttons = true;
+  } else if (conn === "open" && s === "ALERTED") {
+    tone = "told";
+    mood = "worried";
+    word = "Your caregiver has been told";
+    sub = "Help is on the way. If you're OK, press I'm OK.";
+    buttons = true;
+  }
+  const card = $("resident-card");
+  if (card.dataset.tone !== tone) card.dataset.tone = tone;
+  gator($("res-gator"), mood);
+  setText($("resident-word"), word);
+  setText($("resident-sub"), sub);
+  show($("resident-buttons"), buttons);
+  show($("res-help"), s === "COUNTDOWN");
+}
+
+function waveLink(nowMs) {
+  if (pick !== "auto" && links.has(pick)) return links.get(pick);
+  const live = [...links.values()].filter((l) => l.buf.latest());
+  if (!live.length) return null;
+  const moved = live.filter((l) => l.movedAt != null).sort((a, b) => b.movedAt - a.movedAt);
+  if (moved.length && isFresh(moved[0], nowMs)) return moved[0];
+  return live.filter((l) => isFresh(l, nowMs))[0] ?? live[0];
+}
+
+function renderPicker() {
+  const box = $("wave-pick");
+  const names = ["auto", ...[...links.keys()].sort()];
+  if (box.children.length !== names.length) {
+    box.replaceChildren(...names.map((name) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.dataset.link = name;
+      b.textContent = name === "auto" ? "Auto" : name;
+      b.addEventListener("click", () => {
+        pick = name;
+        renderPicker();
+      });
+      return b;
+    }));
+  }
+  for (const b of box.children) b.setAttribute("aria-pressed", String(b.dataset.link === pick));
+}
+
+function eventMarks(name) {
+  return st.events
+    .filter((e) => e.links.split("+").includes(name))
+    .map((e) => ({ counts: [], go: e.start, pre: 0, post: Math.max(0, e.end - e.start) }));
+}
+
+function ensureAudio() {
+  if (!audio) {
+    try {
+      audio = new AudioContext();
+    } catch {
+      return null;
+    }
+  }
+  if (audio.state === "suspended") audio.resume().catch(() => {});
+  return audio;
+}
+
+function beep() {
+  if (!audio || audio.state !== "running") return;
+  const t = audio.currentTime;
+  for (const [at, hz] of [[0, 880], [0.22, 660]]) {
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    osc.type = "square";
+    osc.frequency.value = hz;
+    gain.gain.setValueAtTime(0.0001, t + at);
+    gain.gain.exponentialRampToValueAtTime(0.12, t + at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.19);
+    osc.connect(gain).connect(audio.destination);
+    osc.start(t + at);
+    osc.stop(t + at + 0.2);
+  }
+}
+
+function renderSound() {
+  const want = st.alarm && !muted && conn === "open";
+  if (want && !beepTimer) {
+    beep();
+    beepTimer = setInterval(beep, BEEP_MS);
+  } else if (!want && beepTimer) {
+    clearInterval(beepTimer);
+    beepTimer = null;
+  }
+  const running = audio && audio.state === "running";
+  const mode = muted ? "muted" : running ? "on" : "blocked";
+  const btn = $("sound");
+  if (btn.dataset.sound !== mode) {
+    btn.dataset.sound = mode;
+    btn.textContent = { muted: "Alarm sound off", on: "Alarm sound on", blocked: "Turn on alarm sound" }[mode];
+    btn.setAttribute("aria-pressed", String(!muted));
+  }
+}
+
+function renderTip() {
+  const tip = $("tip");
+  if (!hover || view !== "caregiver") {
+    tip.hidden = true;
+    return;
+  }
+  const now = avg.now(performance.now());
+  const hit = now != null ? timeAtX($("cg-energy"), hover.clientX, now) : null;
+  const f = hit ? avg.nearest(hit.t) : null;
+  if (!hit || !f || Math.abs(f.t - hit.t) > 0.3) {
+    tip.hidden = true;
+    return;
+  }
+  const b = document.createElement("b");
+  b.textContent = f.level === "moving" ? "Moving" : "Calm";
+  tip.replaceChildren(b, document.createTextNode(` · ${Math.max(0, now - hit.t).toFixed(0)} s ago`));
+  tip.hidden = false;
+  tip.style.left = `${Math.min(hover.clientX + 14, window.innerWidth - tip.offsetWidth - 8)}px`;
+  tip.style.top = `${Math.min(hover.clientY + 14, window.innerHeight - tip.offsetHeight - 8)}px`;
+  return hit.x;
+}
+
+function setView(next) {
+  view = next;
+  $("caregiver").hidden = view !== "caregiver";
+  $("resident").hidden = view !== "resident";
+  $("dev").hidden = view !== "dev";
+  document.body.dataset.view = view;
+  theme = readTheme(document.body);
+  soft = readTheme($("caregiver"));
+  for (const b of document.querySelectorAll(".views button")) b.setAttribute("aria-pressed", String(b.dataset.view === view));
+  placeThumb();
+  const url = new URL(location.href);
+  if (view === "caregiver") url.searchParams.delete("view");
+  else url.searchParams.set("view", view);
+  history.replaceState(null, "", url);
+}
+
+function placeThumb() {
+  const on = document.querySelector(`.views button[data-view="${view}"]`);
+  const thumb = document.querySelector(".views-thumb");
+  if (!on || !thumb) return;
+  thumb.style.width = `${on.offsetWidth}px`;
+  thumb.style.transform = `translateX(${on.offsetLeft}px)`;
+}
+
+function setTab(next) {
+  tab = next;
+  $("events").hidden = tab !== "live";
+  $("history").hidden = tab !== "history";
+  setText($("log-note"), tab === "live" ? "this run, newest first" : "Confirmed Falls, Check-ins and Alerts across runs");
+  for (const b of document.querySelectorAll(".tabs button")) {
+    b.setAttribute("aria-pressed", String(b.dataset.tab === tab));
+    b.setAttribute("aria-selected", String(b.dataset.tab === tab));
+  }
+}
+
+function loop() {
+  const nowMs = performance.now();
+  drawBg(nowMs);
+  for (const mv of document.querySelectorAll("model-viewer")) moveJaw(mv, nowMs / 1000);
+  if (view === "caregiver") {
+    renderCare(nowMs);
+    const hx = renderTip();
+    movement.draw(avg.now(nowMs), [], soft, hx ?? null, null);
+  } else if (view === "resident") {
+    renderResident(nowMs);
+    $("tip").hidden = true;
+  } else {
+    $("tip").hidden = true;
+    let now = null;
+    for (const l of links.values()) {
+      const t = l.buf.now(nowMs);
+      if (t != null && (now == null || t > now)) now = t;
+    }
+    const shown = waveLink(nowMs);
+    wave.buffer = shown ? shown.buf : empty;
+    setText($("wave-note"), shown ? `link ${shown.name} · 8 subcarriers, flat = still, swings = movement` : "waiting for packets");
+    wave.draw(now, [], theme, null);
+    const withData = [...links.values()].filter((l) => l.buf.latest());
+    for (const l of links.values()) {
+      l.plot.hidden = withData.length ? !l.buf.latest() : l.name !== "A";
+      if (!l.plot.hidden) l.chart.draw(now, eventMarks(l.name), theme, null, st.cfg);
+    }
+    renderStatus(nowMs);
+    renderMotion(nowMs);
+    renderMap(nowMs);
+  }
+  renderChips(nowMs);
+  $("simulate").disabled = conn !== "open" || flowState() !== "IDLE" || !!(st.state && st.state.sim);
+  renderSound();
+  requestAnimationFrame(loop);
+}
+
+const link = connect(onMessage, onState);
+const commands = [
+  ["cancel", { cmd: "cancel" }], ["resolve-handled", { cmd: "resolve", reason: "handled" }],
+  ["resolve-false", { cmd: "resolve", reason: "false_alarm" }], ["call", { cmd: "call" }],
+  ["cg-cancel", { cmd: "cancel" }], ["cg-handled", { cmd: "resolve", reason: "handled" }],
+  ["cg-false", { cmd: "resolve", reason: "false_alarm" }], ["cg-call", { cmd: "call" }],
+  ["simulate", { cmd: "simulate" }], ["res-ok", { cmd: "ok" }], ["res-help", { cmd: "help" }],
+];
+for (const [id, msg] of commands) {
+  $(id).addEventListener("click", () => {
+    ensureAudio();
+    const answer = msg.cmd === "ok" || msg.cmd === "help";
+    link.send(answer && st.state ? { ...msg, fall: st.state.fall } : msg);
+  });
+}
+for (const b of document.querySelectorAll(".views button")) b.addEventListener("click", () => setView(b.dataset.view));
+for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("click", () => setTab(b.dataset.tab));
+$("cg-energy").addEventListener("pointermove", (e) => (hover = { clientX: e.clientX, clientY: e.clientY }));
+$("cg-energy").addEventListener("pointerleave", () => (hover = null));
+$("sound").addEventListener("click", () => {
+  const blocked = !audio || audio.state !== "running";
+  ensureAudio();
+  if (blocked && !muted) return;
+  muted = !muted;
+  try {
+    localStorage.setItem("dash-muted", muted ? "1" : "0");
+  } catch {}
+});
+document.addEventListener("pointerdown", ensureAudio);
+document.addEventListener("keydown", ensureAudio);
+watchTheme(() => {
+  theme = readTheme(document.body);
+  soft = readTheme($("caregiver"));
+});
+addEventListener("resize", placeThumb);
+document.fonts?.ready.then(placeThumb);
+setView(view);
+setTab(tab);
+renderWhy();
+renderPicker();
+requestAnimationFrame(loop);
+
+const GLASS = [
+  ["#cg-card", { radius: 32, elasticity: 0, displacementScale: 70 }],
+  [".soft-card.movement", { radius: 24, elasticity: 0, displacementScale: 60 }],
+  [".soft-card.activity", { radius: 24, elasticity: 0, displacementScale: 60 }],
+  ["#resident-card", { radius: 36, elasticity: 0, displacementScale: 70 }],
+  [".toggle.views", { radius: 999, elasticity: 0.12, displacementScale: 50 }],
+  ["#status", { radius: 16, elasticity: 0, displacementScale: 50 }],
+  ["#dev .card", { radius: 12, elasticity: 0, displacementScale: 40 }],
+];
+import("./glass.js")
+  .then(({ mountGlass }) => {
+    for (const [selector, options] of GLASS) {
+      for (const host of document.querySelectorAll(selector)) {
+        mountGlass(host, { overLight: false, blurAmount: 0.3, saturation: 150, aberrationIntensity: 1.5, ...options });
+      }
+    }
+    requestAnimationFrame(placeThumb);
+  })
+  .catch((e) => console.warn("Liquid glass unavailable, keeping the CSS glass:", e));
+</script>
+</body>
+</html>

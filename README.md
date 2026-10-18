@@ -75,8 +75,8 @@ Run everything from the repo root with `python -m`. Each command finds the recei
 | Command | What it does |
 |---|---|
 | `python -m backend.capture.live` | Check capture: prints packet rate, subcarriers, RSSI and a motion bar for each receiver, once a second. Walking across one link's line should move only that link's bar. Saves the raw stream to `data/sessions/`. |
-| `python -m backend.run` | Full detection pipeline live in the terminal. Stay still for the first 10 s while it calibrates. |
-| `python -m backend.run --replay data/sessions/<file>.log --speed 0` | Same, on a saved session (`--speed 0` = as fast as possible). |
+| `python -m backend.run` | Full detection pipeline live, in the terminal and on the dashboard at `http://127.0.0.1:8000/dashboard` (see below). Stay still for the first 10 s while it calibrates. `--no-view` keeps it terminal-only, `--view-port 8001` moves it. |
+| `python -m backend.run --replay data/sessions/<file>.log --speed 0` | Same, on a saved session (`--speed 0` = as fast as possible). A Recording (`data/recordings/*/*.log.gz`) replays with the calibration saved next to it, since the clip is shorter than the 10 s calibration. |
 | `python -m backend.capture.replay <log>` | Play a session log or Recording through the capture meter. |
 | `python -m backend.training.record` | Open the persistent training dashboard at `http://127.0.0.1:8000/`. Choose Fall, Sit Down, Walk or Empty Room, batch size, and Training or Test, then start recording. Run subsequent batches from the same page. |
 | `python -m backend.training.record fall --n 10` | Record 10 labeled clips: wait for 3-2-1-GO, move, hold still until "saved". Labels: `fall`, `sit-down`, `walk`, `empty`. Add `--split test` for the test set, `--recalibrate` after moving the boards. Also opens the live record page at `http://127.0.0.1:8000/` (see below); `--no-view` turns it off, `--view-port 8001` moves it. The laptop also speaks the cues (see below); `--no-voice` goes back to the beeps. |
@@ -85,7 +85,7 @@ Run everything from the repo root with `python -m`. Each command finds the recei
 | `python -m backend.run --detector rf` | Use the trained model instead of the threshold rules. |
 | `python -m backend.sync push` / `pull` | Upload `data/` to the R2 bucket, or download it (see Data storage above). |
 
-All tunable numbers (thresholds, timings, ntfy topic) are in `backend/config.py`.
+All tunable numbers (thresholds, timings) are in `backend/config.py`. Phone numbers stay out of git, in `.env` (see the dashboard section below).
 
 Session logs and Recordings store one packet per line: `<laptop time>\t<link>\t<CSI_DATA line>`. Files from before the second receiver have no link column and read as link A, so the old Recordings still train as before. A Recording's `.json` keeps one calibration per link, and its `rate_hz` gives packets per second per link. `calibration.json` also keeps one calibration per link. `record.py` recalibrates when a receiver has none saved yet.
 
@@ -157,14 +157,70 @@ The Recalibrate button sends `POST /calibrate` with `Content-Type: application/j
 
 `record.py` waits for the first packet before it starts, so a slow serial start no longer eats clip 1's get-in-position time. If the packet stream ends (a replay running out), it stops with a message instead of hanging. Stop releases both receiver ports before another batch can start. Packets of an unexpected size are left out of the page once a calibration is loaded, so one stray packet can't reset the charts. If the page itself breaks, the terminal says so once, the page shows `VIEW STOPPED`, and the recording carries on.
 
+### The dashboard
+
+`backend.run` serves `web/dashboard.html` at `/dashboard` (the record page stays at `/`) and opens it. Words in capitals are defined in [GLOSSARY.md](GLOSSARY.md). A toggle in the header switches between three views (`/dashboard?view=resident` or `?view=dev` opens one directly), and the header holds **Simulate fall**, which plays a real fall Recording (`--sim-fall`, default `backend/assets/sim_fall.log.gz`, a copy of `fall_20261017-021504` kept in git so it works without pulling data from R2) through its own trackers into the same Fall Flow, so the detector, the Stillness Window and the Countdown all run for real without hardware.
+
+**Caregiver view** (the default): liquid-glass cards ([liquid-glass-react](https://github.com/rdev/liquid-glass-react), MIT, rendered as small React islands by `web/glass.js`; React 19 and the library are vendored in `web/vendor/` and loaded with an import map, so there is still no build step and it works offline; the edge refraction shows in Chrome, Safari and Firefox get the plain glass) in a pixel-and-CAD theme: DotGothic16 for headings and DM Sans for text (both OFL, vendored in `web/vendor/fonts/`), shades of green on a faint drafting grid, and `web/gator_side.png`, a side render of the CAD gator, as the logo. The cards sit a slowly turning field of colored dots that moves aside under the cursor, line icons and no emoji. The centrepiece is the 3D gator enclosure itself (`hardware/enclosure/web/gator_case.glb`, served at `/models/` and shown with the vendored `web/vendor/model-viewer.min.js`, so it works offline): it spins slowly when all is well, faster while a fall is checked or counted down, and stops facing you when the Caregiver is alerted, on a stage that glows green, amber or red. Its upper jaw (a separate part in the file) chomps now and then when all is well, chomps quickly while a fall is checked or counted down, and gapes wide when the Caregiver is alerted; it turns around the back of the jaw, where the printed jaw sits on its pegs. model-viewer has no public API for moving one part, so this uses its internal scene, pinned by the vendored 4.0.0 build. You can drag it to turn it. If WebGL or the model is unavailable, a drawn gator stands in. A Simulated Fall looks like a real one there; only the Dev view tags it. One big card says what is going on in plain words ("All is well", "Possible fall", "Rose may have fallen" with a countdown ring, "Rose needs help") with the buttons that apply right then: **Cancel the alert**, **I've handled it**, **It was a false alarm**, and **Call them** when `RESIDENT_PHONE` is set. Beside it, **Movement in the room** (motion energy averaged over the Links) and **Recent activity** (falls, Check-ins with their delivery status, answers and Alerts, across runs). Set `RESIDENT_NAME` in `.env` to use the Resident's name instead of "they".
+
+**Resident view**, a fallback for when the texts can't get through, with the same glass, dots and 3D gator: "All good" until a Confirmed Fall (it says nothing while a fall is only suspected, so it never coaches anyone to stay down), then "Are you OK?" with the seconds left, **I'm OK** and **I need help**. After the Alert it says "Your caregiver has been told" and **I'm OK** still works as a Late Answer.
+
+**Dev view**, everything for the team and the judges' technical questions:
+
+- A Fall Flow badge (`ALL QUIET`, `FALL SUSPECTED`, `FALL DETECTED`, `CAREGIVER ALERTED`, with a `SIMULATED` tag) and a Motion Level badge per Link, with the Caregiver's buttons.
+- A top-down **room map**: the sender at the point of the V, a line to each receiver. A line turns blue while its Link is moving, amber while a fall is suspected on it, and red for the Link(s) of the Confirmed Fall.
+- **Why it's a fall**: the last fall's `peak` and Room Change against `T_FALL` and `T_STATIC`. Before any fall it shows why the last Motion Event was not one.
+- The waveform (Auto follows the Link that moved last), motion energy for each Link with Motion Events shaded, and a log with **Live** and **History** tabs.
+
+Every view sounds the Alarm during the Countdown, with a mute toggle. Browsers only allow sound after a click on the page, so the toggle says so until then.
+
+When a replay of a Recording ends, its last second is repeated for 5.5 s so the Stillness Window can finish (Recordings stop 8.5 s after GO; see [docs/adr/0002](docs/adr/0002-pad-recording-replays.md)), and the dashboard stays up until Ctrl-C.
+
+Everything in History is appended to `data/history.jsonl`, tagged `live`, `replay` or `sim`. Phone numbers and the Resident's name go in a `.env` file at the repo root (`RESIDENT_PHONE=...`, `CAREGIVER_PHONE=...`, `RESIDENT_NAME=...`). Both files are gitignored.
+
+#### Messages and commands
+
+On top of the record page's messages, `run.py` sends `frame`s with a `"link"` field (one feed per Link) and:
+
+```json
+{"type":"state","state":"COUNTDOWN","t":...,"deadline":...,"now":...,"sim":false,"fall":7}
+{"type":"event","t":...,"label":"fall","confidence":1.0,"links":"A","details":{"peak":24.97,"static_change":0.58,"duration_s":3.09},"why":"classified","start":...,"end":...,"sim":false}
+{"type":"log","t":...,"text":"Confirmed Fall: Countdown started"}
+{"type":"alarm","on":true}
+{"type":"notify","t":...,"id":12,"to":"resident","kind":"check_in","fall":7,"text":"Fall detected. Are you OK? Reply 1 = I'm OK, 2 = I need help.","status":"sending"}
+{"type":"delivery","t":...,"id":12,"fall":7,"status":"sent"}
+{"type":"history","t":...,"what":"late_answer","mode":"live","fall":7,"late_s":30}
+```
+
+`why` is `classified`, `moved_again` (moved during the Stillness Window) or `cut_short` (kept moving for 8 s). `notify` `kind` is `check_in` (to the Resident), `alert`, `all_clear` or `help` (to the Caregiver). `delivery` `status` is `sent`, `failed`, or `not_delivered` when nothing reported back within 10 s. `state` is re-sent every 0.5 s during a Countdown, and a page that connects late gets the latest `state` and `alarm`, plus every `event`, `log`, `notify`, `delivery` and `history` so far.
+
+Pages and the messaging sidecar send commands back over the same `/ws`:
+
+| Command | From | Does |
+|---|---|---|
+| `{"cmd":"ok","fall":7}` | Resident | During the Countdown, cancels it. After the Alert, a Late Answer: ends the Alert and sends the Caregiver an All-clear. |
+| `{"cmd":"help","fall":7}` | Resident | A Help Request: forwarded to the Caregiver at once (the Countdown keeps running until the Fall Flow gets an `escalate()`). |
+| `{"cmd":"cancel"}` | Caregiver | Cancels the Countdown. |
+| `{"cmd":"resolve","reason":"handled"\|"false_alarm"}` | Caregiver | Closes an Alert. |
+| `{"cmd":"call"}` | Caregiver | Logs that the Caregiver called the Resident. |
+| `{"cmd":"delivered","id":12,"status":"sent"\|"failed"}` | sidecar | Reports what happened to a `notify`. |
+| `{"cmd":"simulate"}` | demo | Plays a Simulated Fall. |
+
+`fall` is optional on `ok` and `help`; without it the answer counts for the fall that is open now. An answer while no fall is open, or for another fall, is a Stale Answer and changes nothing.
+
+#### The messaging sidecar
+
+A starter is in [`messaging/`](messaging/README.md): `node messaging/sidecar.mjs --console` runs the whole loop in a terminal (texts print there, type `1` or `2` to answer as the Resident), and only `sendText()` and `listenForReplies()` are left to connect to Photon. After replaying recent messages to a new connection, the server sends `{"type":"live"}`, so the sidecar never re-sends an old Check-in. Texts go out through [Photon](https://photon.codes/) (iMessage), from a small Node process that connects to `ws://127.0.0.1:8000/ws` like a browser does ([docs/adr/0001](docs/adr/0001-messaging-sidecar-over-ws.md)). It sends each `notify` whose `status` is `sending` to the Resident's or Caregiver's number by `to`, answers with `delivered`, and turns the Resident's replies into commands: `1`, `ok`, `okay`, `yes`, `fine` or 👍 become `ok`, `2` or `help` become `help`, and anything else is forwarded to the Caregiver. Use three separate accounts: the demo laptop sends, and the Resident and the Caregiver each have their own phone. A reply from the sending account itself may be read as its own message.
+
 ## Layout
 
 ```
 backend/
   config.py            all tunable numbers and the data folder location
-  run.py               terminal front end for the pipeline
+  run.py               terminal front end for the pipeline (and the dashboard with --view)
   server.py            live page server: WebSocket hub, 20 Hz signal feed, static files
   sync.py              copy data/ to and from the R2 bucket
+  dashboard.py         dashboard glue: WebSink, commands, history, Simulate fall
   capture/             getting CSI from the board into Frames
     csi.py             parse CSI lines, read logs
     live.py            read the receiver over USB, save sessions
@@ -184,8 +240,12 @@ backend/
     train.py           train and evaluate the random forest
 web/
   record.html          live record page (timing cues + signal)
+  dashboard.html       live dashboard: Caregiver, Resident and Dev views
+  dashboard.css        dashboard layout, on top of style.css
   signal.js            waveform, heatmap, energy and CSI-shape charts, reusable for the dashboard
   style.css            colors (light and dark) and layout
+messaging/
+  sidecar.mjs          texts Check-ins and Alerts, turns replies into ok/help (Photon goes here)
 arduino/
   cancel_button/       cancel button + buzzer sketch
 data/                  not in git; kept in R2 with sync.py
@@ -198,6 +258,6 @@ data/                  not in git; kept in R2 with sync.py
 
 ## Status
 
-Working: capture, replay, motion detection, both detectors, the fall flow, recording (with the live record page) and training. Not built yet: the web dashboard (`backend/server.py` and `web/signal.js` are its first pieces), ntfy phone alerts, and the Python side of the Arduino link. The pipeline currently prints the alarm and alerts to the console.
+Working: capture, replay, motion detection, both detectors, the fall flow, recording (with the live record page), training and the live dashboard. Not built yet: the Photon messaging sidecar (the dashboard already publishes what it should send and accepts its replies) and the Python side of the Arduino link.
 
-Both receivers are read together, with motion, calibration and Motion Events per link, in the terminal pipeline, the capture check, replay and `record.py`. `train.py` takes features from the strongest link in each two-link clip, the same way the live pipeline does. Not built yet: a room-area view and a record page that shows both links. The detector was tuned and trained on link A clips only, so it hasn't been checked on falls seen by link B yet.
+Both receivers are read together, with motion, calibration and Motion Events per link, in the terminal pipeline, the capture check, replay and `record.py`. `train.py` takes features from the strongest link in each two-link clip, the same way the live pipeline does. The dashboard shows both links; the record page still shows one. The detector was tuned and trained on link A clips only, so it hasn't been checked on falls seen by link B yet.
