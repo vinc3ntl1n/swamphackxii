@@ -105,3 +105,7 @@ _Avoid_: sample, clip file
 **Session**:
 The raw log of everything the receivers sent during one live run.
 _Avoid_: recording, capture
+
+**Trends**:
+Counts of past Confirmed Falls and Motion Events per day or hour, across many runs; Simulated Falls are left out.
+_Avoid_: analytics, stats, history charts

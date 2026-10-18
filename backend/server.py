@@ -16,7 +16,7 @@ from typing import Callable, Literal
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -202,7 +202,8 @@ def action_allowed(request: Request) -> Response | None:
     return None
 
 
-def make_app(hub: Hub, on_command: Commands | None = None) -> FastAPI:
+def make_app(hub: Hub, on_command: Commands | None = None,
+             trends: Callable[[], dict] | None = None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware("http")
@@ -218,6 +219,17 @@ def make_app(hub: Hub, on_command: Commands | None = None) -> FastAPI:
     @app.get("/dashboard")
     async def dashboard() -> FileResponse:
         return FileResponse(WEB / "dashboard.html")
+
+    @app.get("/trends")
+    def get_trends() -> Response:
+        # Runs in FastAPI's thread pool, so a slow Tiger query never blocks the WebSocket.
+        if trends is None:
+            return Response(status_code=404)
+        try:
+            return JSONResponse(trends())
+        except Exception as e:
+            print(f"  (Trends unavailable: {type(e).__name__})", flush=True)
+            return Response(status_code=503)
 
     @app.post("/calibrate")
     async def calibrate(request: Request) -> Response:
@@ -267,7 +279,8 @@ def _taken(port: int) -> bool:
     return False
 
 
-def serve(hub: Hub, port: int, on_command: Commands | None = None) -> str | None:
+def serve(hub: Hub, port: int, on_command: Commands | None = None,
+          trends: Callable[[], dict] | None = None) -> str | None:
     if port and _taken(port):
         return None
     sock = socket.socket()
@@ -279,7 +292,7 @@ def serve(hub: Hub, port: int, on_command: Commands | None = None) -> str | None
         sock.close()
         return None
     url = f"http://{HOST}:{sock.getsockname()[1]}/"
-    server = uvicorn.Server(uvicorn.Config(make_app(hub, on_command), log_level="warning", lifespan="off"))
+    server = uvicorn.Server(uvicorn.Config(make_app(hub, on_command, trends), log_level="warning", lifespan="off"))
     thread = threading.Thread(target=server.run, args=([sock],), name="view-server", daemon=True)
     thread.start()
     while not server.started and thread.is_alive():
