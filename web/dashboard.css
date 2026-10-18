@@ -1722,6 +1722,83 @@ body:not(.friendly-page) .brand {
   font-family: "DotGothic16", system-ui, sans-serif;
 }
 
+pulse-wifi {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  color: var(--calm);
+  line-height: 0;
+  transition: color 0.4s ease;
+}
+
+pulse-wifi svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+pulse-wifi .wifi-dot {
+  fill: currentColor;
+}
+
+pulse-wifi .wifi-band {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  transition: opacity 0.4s ease;
+}
+
+/* Mostly static: when live, the outermost band breathes slowly. */
+pulse-wifi:not([state="off"]) .wifi-band:last-child {
+  animation: wifi-breathe 3.2s ease-in-out infinite;
+}
+
+pulse-wifi[state="off"] {
+  color: var(--muted);
+}
+
+pulse-wifi[state="off"] .wifi-band {
+  opacity: calc(1.15 - var(--i) / var(--n));
+}
+
+@keyframes wifi-breathe {
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  pulse-wifi .wifi-band { animation: none !important; }
+}
+
+pulse-wifi[pixel] .wifi-dot,
+pulse-wifi[pixel] .wifi-band {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* Just off the logo gator's snout, as if it is sending. */
+.brand-wifi {
+  width: 0.75em;
+  height: 0.75em;
+  margin-left: -8px;
+  align-self: flex-start;
+}
+
+/* Pinned to the gator's box, not the model, so it stays put while the gator turns.
+   Sits under the model (z-index 1) as a faded backdrop. */
+.gator-wifi {
+  position: absolute;
+  top: 0;
+  right: 4%;
+  width: 36%;
+  height: auto;
+  aspect-ratio: 1;
+  color: var(--tone, var(--calm));
+  opacity: 0.32;
+  pointer-events: none;
+  z-index: 0;
+}
+
 .care-sub,
 .resident-sub,
 .act-text,
