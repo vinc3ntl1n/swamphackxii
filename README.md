@@ -68,12 +68,11 @@ Before building `csi_recv`, delete the `esp_wifi_set_mac(WIFI_IF_STA, CONFIG_CSI
 ```bash
 python3.12 -m venv .venv-rf && source .venv-rf/bin/activate
 pip install -r requirements-rf.txt
-# Copy a trusted forest to data/model.joblib, or train from local recordings:
-python -m backend.training.train
-python -m backend.run
+# Run the shared baseline included in this branch:
+python -m backend.run --detector rf --model data/experiments/batch-20261017-233929/baseline.joblib
 ```
 
-The shared RF artifacts require scikit-learn 1.6.1 and NumPy 2.1.3. The existing Python 3.14 `.venv` cannot install those NumPy wheels; use the separate Python 3.12 environment above. To load another local artifact, pass `--model /local/path/baseline.joblib` or set `SWAMP_RF_MODEL` in `.env`. Set `SWAMP_DETECTOR=threshold` only when intentionally using the heuristic. Prediction loads the forest once and does not access R2. See [RF runtime setup](docs/random-forest.md).
+The shared baseline is tracked in Git at the path above; pulling this branch downloads it without needing R2 or retraining. The shared RF artifacts require scikit-learn 1.6.1 and NumPy 2.1.3. The existing Python 3.14 `.venv` cannot install those NumPy wheels; use the separate Python 3.12 environment above. To load another local artifact, pass `--model /local/path/baseline.joblib` or set `SWAMP_RF_MODEL` in `.env`. Set `SWAMP_DETECTOR=threshold` only when intentionally using the heuristic. Prediction loads the forest once and does not access R2. See [RF runtime setup](docs/random-forest.md).
 
 Run everything from the repo root with `python -m`. Each command finds the receivers by their USB serial numbers in `config.RECEIVERS`, so it doesn't matter which port each one is plugged into. The sender's serial number is in `config.SENDER_BOARD`, so it is skipped if it's on USB for power. If one receiver is missing, the command says so and runs on the other. `--port` (receiver A) and `--port-b` (receiver B) override the lookup.
 

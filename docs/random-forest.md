@@ -3,10 +3,13 @@
 Train offline after syncing recordings, then load the saved forest once when
 starting the live detector. Live predictions do not retrain it.
 
-Live detection defaults to RF. The model must be a trusted local file; prediction
-does not access R2 or a database. Set `SWAMP_RF_MODEL` in the repository's `.env`
-or pass `--model` to select the copied artifact. Paths from another teammate's
-machine need a local copy rather than the same absolute pathname.
+Live detection defaults to RF. The shared baseline at
+`data/experiments/batch-20261017-233929/baseline.joblib` is tracked in Git and
+arrives when pulling this branch; no retraining or R2 download is needed.
+The model must be a trusted local file; prediction does not access R2 or a
+database. Set `SWAMP_RF_MODEL` in the repository's `.env` or pass `--model` to
+select the artifact. Other artifacts still need a local copy rather than an
+absolute pathname from another teammate's machine.
 
 ```bash
 # .env (or export these variables in the shell)
