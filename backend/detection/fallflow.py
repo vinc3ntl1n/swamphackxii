@@ -50,6 +50,14 @@ class FallFlow:
             self.sink.log(t, "Alert sent to Caregiver")
             self._go(ALERTED, t)
 
+    def escalate(self, t: float) -> bool:
+        if self.state != COUNTDOWN:
+            return False
+        self.sink.alarm(False)
+        self.sink.log(t, "Help Request: Caregiver alerted early")
+        self._go(ALERTED, t)
+        return True
+
     def cancel(self, t: float, source: str) -> None:
         if self.state != COUNTDOWN:
             return

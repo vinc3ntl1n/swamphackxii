@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pulse</title>
+<title>pulse.</title>
 <script type="importmap">
 {
   "imports": {
@@ -51,7 +51,7 @@
 </template>
 
 <header class="topbar">
-  <span class="brand"><img class="brand-logo" src="gator_side.png" alt="">Pulse</span>
+  <span class="brand"><img class="brand-logo" src="gator_side.png" alt="">pulse.</span>
   <div class="toggle views" role="group" aria-label="View">
     <span class="views-thumb" aria-hidden="true"></span>
     <button type="button" data-view="caregiver">Caregiver</button>
@@ -85,6 +85,12 @@
     </div>
   </section>
   <section class="care-side">
+    <figure class="soft-card glass-card summary" id="cg-summary" data-state="empty">
+      <header><h2>Latest fall</h2><button type="button" class="link-btn" id="cg-all" hidden>All fall summaries</button></header>
+      <p class="sum-live" id="cg-sum-live" hidden>Fall in progress</p>
+      <p class="sum-when" id="cg-sum-when" hidden></p>
+      <p class="sum-text" id="cg-sum-text">No falls yet.</p>
+    </figure>
     <figure class="soft-card glass-card movement">
       <header><h2>Movement in the room</h2><span class="soft-note" id="cg-move-note">last 20 seconds</span></header>
       <div class="plot"><canvas id="cg-energy" role="img" aria-label="Average movement in the room over the last 20 seconds"></canvas></div>
@@ -112,7 +118,7 @@
 <main class="dash" id="dev" hidden>
   <section class="dash-left" aria-label="Fall Flow">
     <div class="status glass-card" id="status" data-tone="idle" role="status" aria-live="polite">
-      <div class="status-head"><span>Pulse</span><span class="status-tag" id="sim-tag" hidden>SIMULATED</span></div>
+      <div class="status-head"><span>pulse.</span><span class="status-tag" id="sim-tag" hidden>SIMULATED</span></div>
       <div class="status-word" id="status-word">CONNECTING</div>
       <div class="status-sub" id="status-sub"></div>
       <div class="progress"><div class="progress-fill" id="status-progress"></div></div>
@@ -186,6 +192,11 @@
   </section>
 </main>
 <div class="tip" id="tip" hidden></div>
+<dialog class="falls-dialog" id="falls" aria-labelledby="falls-title">
+  <header><h2 id="falls-title">All fall summaries</h2><button type="button" class="link-btn close" id="falls-close" aria-label="Close">✕</button></header>
+  <ol class="falls-list" id="falls-list"></ol>
+  <p class="falls-note" id="falls-note" hidden>Older falls are in the history file.</p>
+</dialog>
 
 <script type="module">
 import { SignalBuffer, Waveform, EnergyChart, readTheme, watchTheme, connect, timeAtX } from "./signal.js";
@@ -221,6 +232,19 @@ const HISTORY_TEXT = {
   help_request: (e) => `Help Request from the Resident · fall #${e.fall}`,
   called: (e) => `Caregiver called the Resident${e.fall ? ` · fall #${e.fall}` : ""}`,
   stale_answer: (e) => `Stale Answer ignored (${e.answer}${e.fall != null ? ` for fall #${e.fall}` : ""})`,
+  summary: (e) => {
+    const m = e.metrics ?? {};
+    const sig = m.peak != null ? ` · link ${m.links} · peak ${m.peak} · room change ${m.room_change}` : "";
+    return `Fall Summary #${e.fall} (${e.source})${sig}: ${e.text}`;
+  },
+};
+const SUMMARIES_SHOWN = 50;
+const OUTCOME = {
+  resident_ok: (they) => `${they} said they're OK`,
+  caregiver_cancelled: () => "You cancelled the alert",
+  late_answer: (they) => `${they} said they're OK after the alert`,
+  handled: () => "You marked it handled",
+  false_alarm: () => "You marked it a false alarm",
 };
 
 const links = new Map();
@@ -235,6 +259,7 @@ let conn = "connecting";
 let ever = false;
 let openedAt = performance.now();
 let pick = "auto";
+let helpAsked = null;
 const asked = new URLSearchParams(location.search).get("view");
 let view = asked === "resident" || asked === "dev" ? asked : "caregiver";
 let tab = "live";
@@ -251,6 +276,7 @@ function fresh() {
     cfg: null, source: null, ended: false, state: null, stateAt: 0, alarm: false,
     events: [], lastFall: null, lastVerdict: null, simTag: false,
     notices: new Map(), historyRows: new Map(), activity: 0,
+    summaries: new Map(), pending: new Map(), summaryKey: null,
   };
 }
 
@@ -530,6 +556,10 @@ function onMessage(msg) {
   } else if (msg.type === "notify") onNotify(msg);
   else if (msg.type === "delivery") onDelivery(msg);
   else if (msg.type === "history") onHistory(msg);
+  else if (msg.type === "summary_pending") {
+    st.pending.set(msg.fall, msg);
+    st.summaryKey = null;
+  }
 }
 
 function onState(s) {
@@ -636,7 +666,7 @@ function addActivity(e) {
   const meta = document.createElement("span");
   meta.className = "act-meta";
   const when = document.createElement("span");
-  when.textContent = friendlyDay(e.t);
+  when.textContent = friendlyDay(e.wall ?? e.t);
   meta.append(when);
   if (f.status) {
     const status = document.createElement("span");
@@ -659,6 +689,11 @@ function onHistory(e) {
     onDelivery(e);
     return;
   }
+  if (e.what === "summary") {
+    st.summaries.set(e.fall, e);
+    st.pending.delete(e.fall);
+    st.summaryKey = null;
+  }
   const care = addActivity(e);
   if (e.what === "alert") return;
   let text;
@@ -668,7 +703,7 @@ function onHistory(e) {
   else text = e.what;
   if (e.what === "confirmed_fall") label = "fall";
   const suffix = e.mode && e.mode !== "live" ? ` · ${e.mode === "sim" ? "simulated" : "replay"}` : "";
-  const row = addRow($("history"), e.t, label, text + suffix, label ? "event" : "note", day);
+  const row = addRow($("history"), e.wall ?? e.t, label, text + suffix, label ? "event" : "note", day);
   if (e.what === "notify") {
     row.dataset.status = e.status;
     st.historyRows.set(e.id, { e, row, suffix, care });
@@ -867,6 +902,12 @@ function careFor(nowMs) {
       sub: `We asked ${name ? `if ${name} is` : "if they're"} OK. You'll be alerted if there's no answer.`, timer: tl, fill: tl ? tl.left / tl.span : 0,
     };
   }
+  if (s === "ALERTED" && st.state.help != null) {
+    return {
+      tone: "alert", mood: "alarmed", pill: "Asked for help", word: name ? `${name} asked for help` : "They asked for help", help: true,
+      sub: `${name || "They"} pressed I need help at ${shortClock(st.state.help)} after a fall. Call or go to ${name || "them"} now.`,
+    };
+  }
   if (s === "ALERTED") {
     return {
       tone: "alert", mood: "alarmed", pill: "Needs you", word: name ? `${name} needs help` : "They may need help",
@@ -886,10 +927,105 @@ function careFor(nowMs) {
   return { tone: "calm", mood: "happy", pill: "Watching", word: "All is well", sub: moving ? "Someone is moving around. Everything looks normal." : "The room is calm. No falls detected." };
 }
 
+function span(s) {
+  if (s == null) return "?";
+  return s < 90 ? `${s} s` : `${Math.round(s / 60)} min`;
+}
+
+function metricRows(m) {
+  const name = who();
+  const they = name || "They";
+  const rows = [];
+  const delivery = (status) => (status === "pending" ? "no report yet" : FRIENDLY_DELIVERY[status] ?? status ?? "?");
+  rows.push(["Check-in", m.check_in ? delivery(m.check_in) : "not sent"]);
+  if (m.answer === "help") rows.push(["Answer", `asked for help after ${span(m.answer_after_s)}`]);
+  else if (m.answer === "ok") rows.push(["Answer", `OK after ${span(m.answer_after_s)}`]);
+  else rows.push(["Answer", "no answer"]);
+  if (m.alert_after_s == null) rows.push(["Alert", "not needed"]);
+  else rows.push(["Alert", `after ${span(m.alert_after_s)} · ${delivery(m.alert)}`]);
+  const outcome = OUTCOME[m.outcome];
+  rows.push(["Closed", `${outcome ? outcome(they) : m.outcome}, ${span(m.closed_after_s)} after the fall`]);
+  if (m.called) rows.push(["Call", `You called ${name || "them"}`]);
+  return rows;
+}
+
+function fillMetrics(dl, m) {
+  dl.replaceChildren();
+  for (const [k, v] of metricRows(m)) {
+    const dt = document.createElement("dt");
+    dt.textContent = k;
+    const dd = document.createElement("dd");
+    dd.textContent = v;
+    dl.append(dt, dd);
+  }
+}
+
+// The newest closed fall: its summary, or its metrics while the summary is still being written.
+function latestSummary() {
+  let best = null;
+  for (const e of st.summaries.values()) if (!best || e.fall > best.fall) best = e;
+  for (const p of st.pending.values()) if (!best || p.fall > best.fall) best = { ...p, text: null };
+  return best;
+}
+
+function renderSummary() {
+  const s = flowState();
+  const live = s === "COUNTDOWN" || s === "ALERTED";
+  const latest = latestSummary();
+  const key = `${live}|${latest?.fall}|${latest?.text != null}|${st.summaries.size}|${who()}`;
+  if (key === st.summaryKey) return;
+  st.summaryKey = key;
+  show($("cg-sum-live"), live);
+  show($("cg-all"), st.summaries.size > 0);
+  show($("cg-sum-when"), !!latest);
+  $("cg-summary").dataset.state = latest ? "filled" : "empty";
+  if (!latest) {
+    setText($("cg-sum-text"), live ? "" : "No falls yet.");
+    return;
+  }
+  setText($("cg-sum-when"), friendlyDay(latest.metrics.fall_t));
+  setText($("cg-sum-text"), latest.text ?? "Writing summary…");
+  $("cg-sum-text").classList.toggle("writing", latest.text == null);
+  if ($("falls").open) renderFalls();
+}
+
+function renderFalls() {
+  const list = $("falls-list");
+  const all = [...st.summaries.values()].sort((a, b) => b.fall - a.fall);
+  list.replaceChildren();
+  for (const e of all.slice(0, SUMMARIES_SHOWN)) {
+    const li = document.createElement("li");
+    const head = document.createElement("div");
+    head.className = "falls-head";
+    const when = document.createElement("span");
+    when.className = "falls-when";
+    when.textContent = friendlyDay(e.metrics.fall_t);
+    const how = document.createElement("span");
+    how.className = "falls-how";
+    const outcome = OUTCOME[e.metrics.outcome];
+    how.textContent = outcome ? outcome(who() || "They") : e.metrics.outcome;
+    head.append(when, how);
+    const text = document.createElement("p");
+    text.className = "sum-text";
+    text.textContent = e.text;
+    const more = document.createElement("details");
+    const label = document.createElement("summary");
+    label.textContent = "Details";
+    const dl = document.createElement("dl");
+    dl.className = "sum-metrics";
+    fillMetrics(dl, e.metrics);
+    more.append(label, dl);
+    li.append(head, text, more);
+    list.append(li);
+  }
+  show($("falls-note"), all.length > SUMMARIES_SHOWN);
+}
+
 function renderCare(nowMs) {
   const c = careFor(nowMs);
   const card = $("cg-card");
   if (card.dataset.tone !== c.tone) card.dataset.tone = c.tone;
+  card.classList.toggle("asked-help", !!c.help);
   gator($("cg-gator"), c.mood);
   setText($("cg-pill"), c.pill);
   setText($("cg-word"), c.word);
@@ -902,12 +1038,14 @@ function renderCare(nowMs) {
   const s = flowState();
   const open = conn === "open";
   const phone = callLink($("cg-call"));
+  $("cg-call").classList.toggle("main", !!c.help);
   show($("cg-cancel"), open && s === "COUNTDOWN");
   show($("cg-handled"), open && s === "ALERTED");
   show($("cg-false"), open && s === "ALERTED");
   show($("cg-call"), open && phone && (s === "COUNTDOWN" || s === "ALERTED"));
   const f = avg.latest();
   setText($("cg-move-note"), f && liveLinks(nowMs).length ? (f.level === "moving" ? "moving now" : "calm now") : "last 20 seconds");
+  renderSummary();
 }
 
 function renderMotion(nowMs) {
@@ -990,11 +1128,15 @@ function renderResident(nowMs) {
     word = "Are you OK?";
     sub = tl ? `If you don't answer, your caregiver will be told in ${tl.secs} s` : "Your caregiver will be told soon";
     buttons = true;
-  } else if (conn === "open" && s === "ALERTED") {
+  }
+  const fall = st.state ? st.state.fall : null;
+  const asked = helpAsked != null && helpAsked === fall;
+  if (conn === "open" && (s === "ALERTED" || (s === "COUNTDOWN" && asked))) {
     tone = "told";
     mood = "worried";
-    word = "Your caregiver has been told";
-    sub = "Help is on the way. If you're OK, press I'm OK.";
+    word = asked ? "Help is on its way" : "Your caregiver has been told";
+    sub = asked ? "Your caregiver has been told. If you're OK, press I'm OK."
+      : "Help is on the way. If you're OK, press I'm OK.";
     buttons = true;
   }
   const card = $("resident-card");
@@ -1003,7 +1145,7 @@ function renderResident(nowMs) {
   setText($("resident-word"), word);
   setText($("resident-sub"), sub);
   show($("resident-buttons"), buttons);
-  show($("res-help"), s === "COUNTDOWN");
+  show($("res-help"), s === "COUNTDOWN" && !asked);
 }
 
 function waveLink(nowMs) {
@@ -1194,11 +1336,20 @@ for (const [id, msg] of commands) {
   $(id).addEventListener("click", () => {
     ensureAudio();
     const answer = msg.cmd === "ok" || msg.cmd === "help";
+    if (msg.cmd === "help" && st.state) helpAsked = st.state.fall;
     link.send(answer && st.state ? { ...msg, fall: st.state.fall } : msg);
   });
 }
 for (const b of document.querySelectorAll(".views button")) b.addEventListener("click", () => setView(b.dataset.view));
 for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("click", () => setTab(b.dataset.tab));
+$("cg-all").addEventListener("click", () => {
+  renderFalls();
+  $("falls").showModal();
+});
+$("falls-close").addEventListener("click", () => $("falls").close());
+$("falls").addEventListener("click", (e) => {
+  if (e.target === $("falls")) $("falls").close();
+});
 $("cg-energy").addEventListener("pointermove", (e) => (hover = { clientX: e.clientX, clientY: e.clientY }));
 $("cg-energy").addEventListener("pointerleave", () => (hover = null));
 $("sound").addEventListener("click", () => {
@@ -1228,6 +1379,7 @@ const GLASS = [
   ["#cg-card", { radius: 32, elasticity: 0, displacementScale: 70 }],
   [".soft-card.movement", { radius: 24, elasticity: 0, displacementScale: 60 }],
   [".soft-card.activity", { radius: 24, elasticity: 0, displacementScale: 60 }],
+  [".soft-card.summary", { radius: 24, elasticity: 0, displacementScale: 60 }],
   ["#resident-card", { radius: 36, elasticity: 0, displacementScale: 70 }],
   [".toggle.views", { radius: 999, elasticity: 0.12, displacementScale: 50 }],
   ["#status", { radius: 16, elasticity: 0, displacementScale: 50 }],

@@ -27,3 +27,9 @@ T_STATIC = 0.30
 SIT_MAX_S = 3.5
 
 COUNTDOWN_S = 10.0
+
+# Tried in order: the second answers when the first is overloaded (503) or rate limited.
+GEMINI_MODELS = ("gemini-flash-latest", "gemini-flash-lite-latest")
+SUMMARY_TIMEOUT_S = 10.0
+SUMMARY_MAX_CHARS = 600
+SUMMARIES_SHOWN = 50

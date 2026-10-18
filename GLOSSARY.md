@@ -88,6 +88,10 @@ _Avoid_: reset, dismissed, cleared
 The sound in the room during the Countdown.
 _Avoid_: alert, siren
 
+**Fall Summary**:
+A few plain sentences about one Confirmed Fall, with its numbers (Check-in delivery, answer, Alert, how it ended), written once the fall closes. Never part of the Check-in or the Alert.
+_Avoid_: report, recap, incident log
+
 **Simulated Fall**:
 A recorded real fall played through the whole detection path on demand, standing in for a live fall during a demo.
 _Avoid_: fake fall, test fall, mock

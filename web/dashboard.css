@@ -963,6 +963,21 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
   display: none;
 }
 
+.care-card.asked-help {
+  animation: help-pulse 1.4s ease-out infinite;
+}
+
+.care-card.asked-help #cg-call {
+  order: -1;
+  padding: 18px 34px;
+  font-size: 22px;
+}
+
+@keyframes help-pulse {
+  0% { box-shadow: var(--shadow), 0 0 0 0 rgba(224, 72, 61, 0.55); }
+  100% { box-shadow: var(--shadow), 0 0 0 22px rgba(224, 72, 61, 0); }
+}
+
 .pill-btn:focus-visible {
   outline: 3px solid var(--ink);
   outline-offset: 3px;
@@ -1007,11 +1022,11 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
 }
 
 .soft-card.movement {
-  flex: 1 1 0;
+  flex: 1.15 1 0;
 }
 
 .soft-card.activity {
-  flex: 1.3 1 0;
+  flex: 1 1 0;
 }
 
 .activity-list {
@@ -1215,6 +1230,7 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
   font-weight: 900;
   cursor: pointer;
   box-shadow: var(--shadow);
+  transition: transform 0.08s, filter 0.08s;
 }
 
 .big.ok {
@@ -1228,6 +1244,16 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
   border: 4px solid var(--urgent);
 }
 
+.big:active {
+  transform: scale(0.96);
+  filter: brightness(0.92);
+}
+
+.big.help:active {
+  background: var(--urgent);
+  color: #ffffff;
+}
+
 .big:focus-visible {
   outline: 4px solid var(--ink);
   outline-offset: 4px;
@@ -1235,7 +1261,8 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
 
 @media (prefers-reduced-motion: reduce) {
   .care-card[data-tone="urgent"] .care-gator,
-  .care-card[data-tone="alert"] .care-gator {
+  .care-card[data-tone="alert"] .care-gator,
+  .care-card.asked-help {
     animation: none;
   }
 }
@@ -1724,4 +1751,215 @@ body[data-view="dev"] .bg-dots {
 #dev .card,
 #dev .status {
   border-color: rgba(255, 255, 255, 0.55);
+}
+
+/* Fall Summaries: the Latest fall card and the All fall summaries overlay */
+
+/* Two fixed heights, so the liquid glass behind the card only ever resizes once: from no falls
+   to the first summary. The summary text scrolls inside its box instead of growing the card. */
+.soft-card.summary {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  height: 128px;
+  overflow: hidden;
+}
+
+.soft-card.summary[data-state="filled"] {
+  height: 210px;
+}
+
+#cg-summary .sum-text {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 14px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+}
+
+#cg-summary .sum-live,
+#cg-summary .sum-when {
+  flex: 0 0 auto;
+}
+
+.link-btn {
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+  color: var(--calm);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.link-btn[hidden] {
+  display: none;
+}
+
+.link-btn:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.sum-live {
+  align-self: flex-start;
+  margin: 0 0 8px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--urgent-wash);
+  color: var(--urgent);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.sum-when {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.sum-live[hidden],
+.sum-when[hidden],
+.sum-metrics[hidden],
+.falls-note[hidden] {
+  display: none;
+}
+
+.sum-text {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.sum-text.writing {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.sum-metrics {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 14px;
+  margin: 12px 0 0;
+  font-size: 14px;
+}
+
+.sum-metrics dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.sum-metrics dd {
+  margin: 0;
+  color: var(--ink-2);
+  font-weight: 700;
+}
+
+.falls-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-height: min(80vh, 760px);
+  padding: 20px 22px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 24px;
+  background: rgba(240, 248, 242, 0.82);
+  -webkit-backdrop-filter: blur(18px) saturate(170%);
+  backdrop-filter: blur(18px) saturate(170%);
+  box-shadow: 0 24px 60px rgba(24, 64, 40, 0.18), 0 4px 14px rgba(24, 64, 40, 0.08);
+  color: var(--ink);
+  font-family: "DM Sans", system-ui, sans-serif;
+}
+
+.falls-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.falls-dialog::backdrop {
+  background: rgba(15, 42, 26, 0.28);
+}
+
+.falls-dialog header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+
+.falls-dialog h2 {
+  margin: 0;
+  font-family: "DotGothic16", "DM Sans", ui-monospace, monospace;
+  font-size: 22px;
+  font-weight: 400;
+}
+
+.link-btn.close {
+  color: var(--ink-2);
+  font-size: 20px;
+  text-decoration: none;
+}
+
+.falls-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.falls-list li {
+  padding: 14px 2px;
+  border-bottom: 1px solid rgba(23, 48, 31, 0.08);
+}
+
+.falls-list li:last-child {
+  border-bottom: 0;
+}
+
+.falls-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-bottom: 4px;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.falls-when {
+  color: var(--ink);
+}
+
+.falls-how {
+  color: var(--muted);
+}
+
+.falls-list details {
+  margin-top: 6px;
+  font-size: 14px;
+}
+
+.falls-list summary {
+  color: var(--calm);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.falls-list .sum-metrics {
+  margin-top: 8px;
+}
+
+.falls-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
 }
