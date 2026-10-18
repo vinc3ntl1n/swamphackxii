@@ -205,7 +205,7 @@ Pages and the messaging sidecar send commands back over the same `/ws`:
 
 #### The messaging sidecar
 
-Texts go out through [Photon](https://photon.codes/) (iMessage), from a small Node process that connects to `ws://127.0.0.1:8000/ws` like a browser does ([docs/adr/0001](docs/adr/0001-messaging-sidecar-over-ws.md)). It sends each `notify` whose `status` is `sending` to the Resident's or Caregiver's number by `to`, answers with `delivered`, and turns the Resident's replies into commands: `1`, `ok`, `okay`, `yes`, `fine` or 👍 become `ok`, `2` or `help` become `help`, and anything else is forwarded to the Caregiver. Use three separate accounts: the demo laptop sends, and the Resident and the Caregiver each have their own phone. A reply from the sending account itself may be read as its own message.
+A starter is in [`messaging/`](messaging/README.md): `node messaging/sidecar.mjs --console` runs the whole loop in a terminal (texts print there, type `1` or `2` to answer as the Resident), and only `sendText()` and `listenForReplies()` are left to connect to Photon. After replaying recent messages to a new connection, the server sends `{"type":"live"}`, so the sidecar never re-sends an old Check-in. Texts go out through [Photon](https://photon.codes/) (iMessage), from a small Node process that connects to `ws://127.0.0.1:8000/ws` like a browser does ([docs/adr/0001](docs/adr/0001-messaging-sidecar-over-ws.md)). It sends each `notify` whose `status` is `sending` to the Resident's or Caregiver's number by `to`, answers with `delivered`, and turns the Resident's replies into commands: `1`, `ok`, `okay`, `yes`, `fine` or 👍 become `ok`, `2` or `help` become `help`, and anything else is forwarded to the Caregiver. Use three separate accounts: the demo laptop sends, and the Resident and the Caregiver each have their own phone. A reply from the sending account itself may be read as its own message.
 
 ## Layout
 
@@ -238,6 +238,8 @@ web/
   dashboard.css        dashboard layout, on top of style.css
   signal.js            waveform, heatmap, energy and CSI-shape charts, reusable for the dashboard
   style.css            colors (light and dark) and layout
+messaging/
+  sidecar.mjs          texts Check-ins and Alerts, turns replies into ok/help (Photon goes here)
 arduino/
   cancel_button/       cancel button + buzzer sketch
 data/                  not in git; kept in R2 with sync.py

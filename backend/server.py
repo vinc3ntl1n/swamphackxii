@@ -30,6 +30,7 @@ KEPT_MAX = 2000
 BACKLOG_S = 60.0
 QUEUE_SIZE = 256
 STEP_S = 0.05
+LIVE = json.dumps({"type": "live"})  # sent after the catch-up snapshot, so clients can tell old from new
 HZ_S = 2.0
 
 
@@ -148,6 +149,7 @@ async def _send(client: WebSocket, queue: asyncio.Queue[str], snapshot: list[str
     with contextlib.suppress(WebSocketDisconnect):
         for text in snapshot:
             await client.send_text(text)
+        await client.send_text(LIVE)
         while True:
             await client.send_text(await queue.get())
 
