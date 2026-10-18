@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from backend import server
 from backend.capture.live import live_lines
 from backend.detection.motion import MEASURE
-from backend.training import record, recordings
+from backend.training import contract, record, recordings
 from backend.training.dashboard import Dashboard
 
 
@@ -164,6 +164,10 @@ class DashboardTests(unittest.TestCase):
                 self.assertEqual(len(recs), 1)
                 self.assertEqual(recs[0].label, "empty")
                 self.assertEqual(recs[0].meta["performer"], "tester")
+                self.assertEqual(recs[0].meta["schema_version"], 1)
+                self.assertEqual(recs[0].meta["quality"]["problems"], [])
+                meta_path = recs[0].log_path.with_name(recs[0].meta["recording_id"] + ".json")
+                self.assertEqual(contract.validate_pair(meta_path)["errors"], [])
                 self.assertEqual(recs[0].problems(), [])
                 phases = [json.loads(message)["phase"] for _, message in self.hub.kept]
                 self.assertEqual(phases, ["position", "count", "count", "count", "go", "saved", "done"])

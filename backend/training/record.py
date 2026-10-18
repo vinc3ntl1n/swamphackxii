@@ -13,10 +13,11 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator
+from uuid import uuid4
 
 from backend import config
 from backend.detection import features
-from backend.training import recordings
+from backend.training import contract, recordings
 from backend.capture.csi import DEFAULT_LINK, parse_line
 from backend.detection.detector import ThresholdDetector
 from backend.detection.motion import MEASURE, MotionTracker
@@ -358,6 +359,9 @@ def main() -> None:
     ap.add_argument("--gap", type=float, default=8.0, help="seconds to get in position")
     ap.add_argument("--performer", default="vincent")
     ap.add_argument("--spot", default="test-room", help="where this was recorded")
+    ap.add_argument("--session-id", default=uuid4().hex,
+                    help="collection session shared across action batches; keep in one evaluation split")
+    ap.add_argument("--setup-id", help="board placement identifier; change it when the boards move")
     ap.add_argument("--recalibrate", action="store_true",
                     help="learn the calm room again (do this after moving the boards)")
     session_args(ap)
@@ -373,6 +377,8 @@ def main() -> None:
 
 
 def run_recording(args: argparse.Namespace, hub=None, stop: threading.Event | None = None) -> None:
+    session_id = getattr(args, "session_id", None) or uuid4().hex
+    capture = contract.capture_context("replay" if args.replay else "live")
     cal_path = args.root.parent / recordings.CALIBRATION_FILE
     cal_path.parent.mkdir(parents=True, exist_ok=True)
     saved = json.loads(cal_path.read_text()) if cal_path.exists() else None
@@ -437,7 +443,9 @@ def run_recording(args: argparse.Namespace, hub=None, stop: threading.Event | No
                 "packets": len(clip),
                 "rate_hz": {link: round(sum(row[1] == link for row in clip) / (PRE_S + POST_S), 1)
                             for link in links},
-                "recorded_at": datetime.now().isoformat(timespec="seconds"),
+                "recorded_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "session_id": session_id, "setup_id": getattr(args, "setup_id", None),
+                "capture": capture,
                 "calibration": cal,
             }
             path = recordings.save(clip, meta, args.root)
@@ -449,6 +457,10 @@ def run_recording(args: argparse.Namespace, hub=None, stop: threading.Event | No
                 v = detector.classify(features.extract(*inputs))
                 seen = f"rules say {v.label} " + ", ".join(f"{k} {x}" for k, x in v.details.items())
             problems = rec.problems()
+            meta["quality"] = {"validator_version": contract.VALIDATOR_VERSION,
+                               "problems": problems}
+            path.with_name(path.name.removesuffix(".log.gz") + ".json").write_text(
+                json.dumps(meta, indent=1))
             beep("Basso" if problems else "Pop")
             view.voice.say(f"{problems[0].split(' (')[0].capitalize()}. Do an extra." if problems else "Saved.")
             rates = ", ".join(f"{link} {hz} Hz" for link, hz in meta["rate_hz"].items())

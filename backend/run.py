@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+from pathlib import Path
 
 from backend import config
 from backend.detection import detector
@@ -38,6 +39,8 @@ def main() -> None:
     ap.add_argument("--replay", help="a session log or Recording to play back instead")
     ap.add_argument("--speed", type=float, default=1.0, help="replay speed, 0 = no waiting")
     ap.add_argument("--detector", choices=("threshold", "rf"), default=config.DETECTOR)
+    ap.add_argument("--model", type=Path, default=detector.MODEL_PATH,
+                    help="saved forest to load with --detector rf")
     args = ap.parse_args()
 
     if args.replay:
@@ -53,7 +56,7 @@ def main() -> None:
         print(f"LIVE {', '.join(f'{link} {port}' for link, port in ports.items())}, saving to {log_path}")
 
     sink = ConsoleSink()
-    pipe = Pipeline(sink, detector.make(args.detector))
+    pipe = Pipeline(sink, detector.make(args.detector, args.model))
     print(f"Detector: {pipe.detector.name}")
     print("Calibrating: keep the area between the boards still for 10 s...")
     last_level: dict[str, str] = {}

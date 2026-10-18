@@ -5,12 +5,14 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 
 from backend import config
 from backend.capture.csi import DEFAULT_LINK, Frame, log_row, parse_line, read_log
 from backend.detection.motion import MotionEvent, MotionTracker
+from backend.training import contract
 
 RECORDINGS = config.DATA_DIR / "recordings"
 CALIBRATION_FILE = "calibration.json"
@@ -105,14 +107,14 @@ def per_link(cal: dict) -> dict[str, dict]:
 def save(lines: list[tuple[float, str, str]], meta: dict, root: Path = RECORDINGS) -> Path:
     folder = root / meta["split"]
     folder.mkdir(parents=True, exist_ok=True)
-    stem = f"{meta['label']}_{datetime.now():%Y%m%d-%H%M%S}"
-    base, n = folder / stem, 2
-    while base.with_name(base.name + ".json").exists():
-        base, n = folder / f"{stem}-{n}", n + 1
+    stem = f"{meta['label']}_{datetime.now():%Y%m%d-%H%M%S}_{uuid4().hex}"
+    base = folder / stem
     log_path = base.with_name(base.name + ".log.gz")
     with gzip.open(log_path, "wt") as f:
         for t, link, line in lines:
             f.write(log_row(t, link, line))
+    meta.update(schema_version=contract.SCHEMA_VERSION, recording_id=stem,
+                raw_sha256=contract.sha256(log_path))
     base.with_name(base.name + ".json").write_text(json.dumps(meta, indent=1))
     return log_path
 
