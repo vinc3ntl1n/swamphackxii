@@ -746,8 +746,9 @@ export function sparkline(canvas, frames, go, cfg, theme) {
 }
 
 export function connect(onMessage, onState, url = `ws://${location.host}/ws`) {
+  let ws = null;
   const open = () => {
-    const ws = new WebSocket(url);
+    ws = new WebSocket(url);
     ws.onopen = () => onState("open");
     ws.onmessage = (e) => {
       let msg;
@@ -764,4 +765,11 @@ export function connect(onMessage, onState, url = `ws://${location.host}/ws`) {
     };
   };
   open();
+  return {
+    send(msg) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+      ws.send(JSON.stringify(msg));
+      return true;
+    },
+  };
 }
