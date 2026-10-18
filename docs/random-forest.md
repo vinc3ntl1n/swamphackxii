@@ -3,6 +3,37 @@
 Train offline after syncing recordings, then load the saved forest once when
 starting the live detector. Live predictions do not retrain it.
 
+Live detection defaults to RF. The model must be a trusted local file; prediction
+does not access R2 or a database. Set `SWAMP_RF_MODEL` in the repository's `.env`
+or pass `--model` to select the copied artifact. Paths from another teammate's
+machine need a local copy rather than the same absolute pathname.
+
+```bash
+# .env (or export these variables in the shell)
+SWAMP_DETECTOR=rf
+SWAMP_RF_MODEL=data/experiments/batch-20261017-233929/baseline.joblib
+```
+
+`SWAMP_DETECTOR=threshold` or `--detector threshold` explicitly selects the
+heuristic. A missing, malformed or incompatible requested RF stops startup;
+it never silently selects the heuristic.
+
+The shared baseline and threshold-035 artifacts were saved with scikit-learn
+1.6.1 and NumPy 2.1.3. Create a separate compatible environment (these pinned
+versions do not support Python 3.14):
+
+```bash
+python3.12 -m venv .venv-rf
+source .venv-rf/bin/activate
+python -m pip install -r requirements-rf.txt
+python -m backend.run --model data/experiments/batch-20261017-233929/baseline.joblib
+```
+
+Startup rejects declared library-version mismatches and scikit-learn's
+inconsistent-version pickle warning. Versionless legacy bundles remain readable
+when scikit-learn can load them without a compatibility warning. Re-evaluate a
+retrained model before substituting it for the shared baseline.
+
 ```bash
 python -m backend.training.validate --report /tmp/csi-validation.json
 python -m backend.training.train
@@ -107,6 +138,9 @@ loads that threshold automatically and uses the same decision function as
 offline evaluation. Legacy bundles without a threshold continue to use argmax.
 The returned confidence is the selected class's vote probability; verdict
 details separately expose `fall_probability`.
+Verdict details include all six feature values in order (`peak`, `static_change`,
+`duration_s`, `mean_energy`, `time_to_peak_s`, `stop_s`) and `class_probabilities`.
+These probabilities are model scores, not calibrated real-world risk estimates.
 
 Feature names/order and saved preprocessing settings must match the running
 code. Retrain after changing either. Compare reports before replacing the

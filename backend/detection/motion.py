@@ -11,6 +11,7 @@ from backend.capture.csi import DEFAULT_LINK, Frame
 CALIBRATING, NO_MOTION, MOVING = "calibrating", "no motion", "moving"
 MEASURE = "mean-shift-0.5"
 MIN_HALF_FRAMES = 4
+CALIBRATION_RETRY_S = 0.5
 
 
 @dataclass
@@ -55,12 +56,18 @@ def calibration_from_frames(frames: list[Frame]) -> dict | None:
         return None
     t = np.array([f.t for f in kept])
     amps = np.stack([f.amp for f in kept])
+    if not np.isfinite(t).all() or not np.isfinite(amps).all():
+        return None
     mask = amps.mean(axis=0) > 0
+    if not mask.any():
+        return None
     amps = amps[:, mask]
     raws = np.array([r for i in range(len(t)) if (r := raw_energy(t[:i + 1], amps[:i + 1], t[i])) is not None])
     if raws.size < 10:
         return None
     baseline = float(np.median(raws))
+    if not np.isfinite(baseline) or baseline <= 0:
+        return None
     return {"measure": MEASURE, "size": int(size), "mask": np.nonzero(mask)[0].tolist(),
             "baseline": baseline, "noisy_frac": float((raws > config.T_ON * baseline).mean())}
 
@@ -76,6 +83,7 @@ class MotionTracker:
         self.baseline: float | None = None
         self.cal: dict | None = None
         self.cal_frames: list[Frame] = []
+        self.cal_retry_at: float | None = None
         self.window: deque[tuple[float, np.ndarray]] = deque()
         self.history: deque[tuple[float, float, np.ndarray]] = deque()
         self.level = CALIBRATING
@@ -90,6 +98,13 @@ class MotionTracker:
         if cal.get("measure") != MEASURE:
             raise ValueError(f"calibration is for motion measure {cal.get('measure')!r}, "
                              f"not {MEASURE!r}: recalibrate")
+        size, mask, baseline = cal.get("size"), cal.get("mask"), cal.get("baseline")
+        if (type(size) is not int or size <= 0 or not isinstance(mask, list) or not mask
+                or any(type(i) is not int or not 0 <= i < size for i in mask)
+                or len(set(mask)) != len(mask)):
+            raise ValueError("calibration must contain a positive size and unique usable channels")
+        if (type(baseline) not in (int, float) or not np.isfinite(baseline) or baseline <= 0):
+            raise ValueError("calibration baseline must be positive and finite: recalibrate")
         self.calibrate()
         self.cal = cal
         self.size = cal["size"]
@@ -162,9 +177,18 @@ class MotionTracker:
 
     def _calibrating(self, frame: Frame) -> None:
         self.cal_frames.append(frame)
+        if self.cal_retry_at is not None:
+            # An unusable baseline should not retain an entire live session.
+            # Keep one frame at the boundary so the window still spans 10 s.
+            cutoff = frame.t - config.CALIBRATE_S
+            while len(self.cal_frames) > 1 and self.cal_frames[1].t <= cutoff:
+                self.cal_frames.pop(0)
         if frame.t - self.cal_frames[0].t < config.CALIBRATE_S:
+            return
+        if self.cal_retry_at is not None and frame.t < self.cal_retry_at:
             return
         cal = calibration_from_frames(self.cal_frames)
         if cal is None:
+            self.cal_retry_at = frame.t + CALIBRATION_RETRY_S
             return
         self.load_calibration(cal)

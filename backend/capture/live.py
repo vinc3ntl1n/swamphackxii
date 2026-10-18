@@ -95,9 +95,12 @@ def live_lines(ports: dict[str, str], log_path: Path | None = None,
             log.close()
 
 
-def live_frames(ports: dict[str, str], log_path: Path | None = None) -> Iterator[Frame]:
-    for t, link, line in live_lines(ports, log_path):
-        yield parse_line(line, t, link)
+def live_frames(ports: dict[str, str], log_path: Path | None = None,
+                stop: threading.Event | None = None) -> Iterator[Frame]:
+    for t, link, line in live_lines(ports, log_path, stop):
+        frame = parse_line(line, t, link)
+        if frame is not None:
+            yield frame
 
 
 def main() -> None:

@@ -38,6 +38,7 @@ class RandomForestRuntimeTests(unittest.TestCase):
         self.assertEqual(view.pipe.detector.name, "rf")
         self.assertEqual(view.pipe.detector.fall_threshold, 0.35)
         self.assertIs(view.pipe.sink, view.sink)
+        self.assertIn('detector', view.hub.sticky)
 
     def live_cli(self, *extra):
         argv = ["run", "--detector", "rf", "--model", str(self.model_path),
@@ -52,7 +53,7 @@ class RandomForestRuntimeTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as output:
             run.main()
         self.assertIn("Detector: rf", output.getvalue())
-        self.assertTrue(make.call_args_list)
+        make.assert_called_once_with("rf", self.model_path)
         for call in make.call_args_list:
             self.assertEqual(call.args, ("rf", self.model_path))
 
@@ -60,6 +61,17 @@ class RandomForestRuntimeTests(unittest.TestCase):
         with patch.object(run, "start_view") as start:
             self.live_cli("--no-view")
             start.assert_not_called()
+
+    def test_missing_artifact_fails_before_opening_receivers(self):
+        with patch("sys.argv", ["run", "--no-view", "--model", str(self.root / "missing.joblib")]), \
+                patch.object(dashboard, "load_env"), \
+                patch("backend.capture.live.receivers") as receivers, \
+                contextlib.redirect_stderr(io.StringIO()) as output:
+            with self.assertRaises(SystemExit) as stopped:
+                run.main()
+        self.assertEqual(stopped.exception.code, 1)
+        self.assertIn("Detector startup failed", output.getvalue())
+        receivers.assert_not_called()
 
     def test_busy_dashboard_falls_back_to_same_custom_model(self):
         with patch.object(server, "serve", return_value=None), \

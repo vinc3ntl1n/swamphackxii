@@ -21,13 +21,41 @@ class Pipeline:
         self.links = ""
         self.deadline = 0.0
         self.after: list[tuple[float, np.ndarray]] = []
+        self.suspended: set[str] = set()
 
-    def calibrate(self) -> None:
+    def calibrate(self, t: float | None = None) -> None:
         for tracker in self.trackers.values():
             tracker.calibrate()
-        self.ended, self.pending, self.after = {}, None, []
+        self.ended = {}
+        self._discard_candidate(t if t is not None else self.flow.started or 0.0)
+
+    def suspend_link(self, link: str, t: float) -> bool:
+        """Invalidate a lost live signal; require fresh calibration when it returns.
+
+        Call this from live-source health monitoring, never to pad a replay or to
+        infer stillness from missing packets. Confirmed fall countdowns continue.
+        """
+        tracker = self.trackers.get(link)
+        if tracker is None or link in self.suspended:
+            return False
+        self.suspended.add(link)
+        if tracker.level == MOVING:
+            # Other ended events were waiting for this unfinished movement.
+            self.ended = {}
+        else:
+            self.ended.pop(link, None)
+        tracker.calibrate()
+        if self.pending is not None and link in self.links.split("+"):
+            self._discard_candidate(t)
+        self.sink.log(t, f"Link {link} signal lost; recalibrating when packets resume")
+        return True
+
+    def _discard_candidate(self, t: float) -> None:
+        self.pending, self.after, self.links, self.deadline = None, [], "", 0.0
+        self.flow.not_a_fall(t)
 
     def process(self, frame: Frame) -> tuple[FrameInfo, tuple[MotionEvent, Verdict] | None]:
+        self.suspended.discard(frame.link)
         tracker = self.trackers.get(frame.link)
         if tracker is None:
             tracker = self.trackers[frame.link] = MotionTracker(frame.link)
@@ -43,7 +71,8 @@ class Pipeline:
                 self.after.append((info.t, info.amp))
             if info.level == MOVING:
                 result = self._moved_again(info.t)
-            elif info.t >= self.deadline:
+            elif (info.t >= self.deadline and frame.link == self.pending.link
+                  and info.amp is not None):
                 result = self._decide(info.t)
 
         if event is not None:

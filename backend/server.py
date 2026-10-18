@@ -25,7 +25,7 @@ from backend.detection.motion import FrameInfo
 WEB = Path(__file__).resolve().parent.parent / "web"
 MODELS = WEB.parent / "hardware" / "enclosure" / "web"
 HOST = "127.0.0.1"
-STICKY = ("source", "config", "session", "state", "alarm")
+STICKY = ("source", "config", "session", "state", "alarm", "detector", "sensor")
 KEPT = ("record", "event", "log", "notify", "delivery", "history")
 KEPT_MAX = 2000
 BACKLOG_S = 60.0
@@ -57,7 +57,9 @@ class Hub:
         with self.lock:
             self.seq += 1
             if kind in STICKY:
-                self.sticky[kind] = (self.seq, text)
+                # Each receiver needs its own latest health snapshot on reconnect.
+                key = f"sensor:{msg['link']}" if kind == "sensor" else kind
+                self.sticky[key] = (self.seq, text)
             elif kind in KEPT:
                 self.kept.append((self.seq, text))
             else:
@@ -114,11 +116,16 @@ class SignalFeed:
         self.level = ""
         self.rssi = 0
         self.times: deque[float] = deque()
+        self.sim = False
 
-    def add(self, info: FrameInfo, rssi: int, row: np.ndarray | None = None) -> None:
+    def add(self, info: FrameInfo, rssi: int, row: np.ndarray | None = None, *, sim: bool = False) -> None:
         row = info.amp if row is None else row
         if row is None:
             return
+        if sim != self.sim:
+            self.flush()
+            self.times.clear()
+            self.sim = sim
         slot = math.floor(info.t / STEP_S)
         if self.count and (slot != self.slot or row.size != self.sum.size):
             self.flush()
@@ -147,6 +154,7 @@ class SignalFeed:
             "type": "frame", "t": self.t,
             "energy": None if self.energy is None else round(self.energy, 2),
             "level": self.level, "row": values, "rssi": self.rssi, "hz": hz,
+            "sim": self.sim,
         }
         if self.link is not None:
             msg["link"] = self.link
