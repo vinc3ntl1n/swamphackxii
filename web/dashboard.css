@@ -21,12 +21,207 @@
   --alerted: #8f3333;
 }
 
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 16px 0;
+}
+
+.toggle.views {
+  margin-left: 0;
+}
+
+.toggle.views button {
+  padding: 6px 16px;
+  font-size: 15px;
+}
+
+.demo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding: 3px 4px 3px 12px;
+  border: 1px dashed var(--axis);
+  border-radius: 999px;
+}
+
+.demo-label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+button.chip {
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+button.chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .dash {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
   gap: 16px;
-  height: 100vh;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px 16px 16px;
+}
+
+.dash[hidden],
+.resident[hidden] {
+  display: none;
+}
+
+.motion {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.actions-note {
+  align-self: center;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.actions-note[hidden],
+.actions .btn[hidden] {
+  display: none;
+}
+
+a.btn {
+  text-decoration: none;
+  text-align: center;
+}
+
+.btn.primary {
+  flex: 1 1 auto;
+  background: var(--ink);
+  color: var(--surface);
+  border-color: transparent;
+}
+
+#history li {
+  grid-template-columns: 9.5em 6.5em minmax(0, 1fr);
+}
+
+.events li.notice[data-status="sent"] .nums {
+  color: var(--good);
+}
+
+.events li.notice[data-status="failed"] .nums,
+.events li.notice[data-status="not_delivered"] .nums {
+  color: var(--critical);
+}
+
+.toggle.tabs {
+  margin-left: 0;
+}
+
+.resident {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
   padding: 16px;
+}
+
+.resident-card {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3vh;
+  padding: 24px;
+  border-radius: 24px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink);
+  text-align: center;
+}
+
+.resident-card[data-tone="ask"] {
+  background: var(--countdown);
+  color: var(--on-countdown);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.resident-card[data-tone="told"] {
+  background: var(--alerted);
+  color: var(--on-alerted);
+}
+
+.resident-word {
+  font-size: clamp(34px, min(11vh, 13vw), 140px);
+  font-weight: 800;
+  line-height: 1.05;
+}
+
+.resident-sub {
+  font-size: clamp(20px, 4vh, 44px);
+  font-weight: 600;
+}
+
+.resident-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 20px;
+  width: 100%;
+}
+
+.resident-buttons[hidden],
+.big[hidden] {
+  display: none;
+}
+
+.big {
+  flex: 1 1 280px;
+  max-width: 560px;
+  min-height: 18vh;
+  border: 4px solid transparent;
+  border-radius: 24px;
+  font: inherit;
+  font-size: clamp(32px, 7vh, 80px);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.big.ok {
+  background: var(--good);
+  color: var(--on-good);
+  border-color: rgba(255, 255, 255, 0.8);
+}
+
+.big.help {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.big:focus-visible {
+  outline: 4px solid var(--series);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .resident-card[data-tone="ask"] {
+    animation: none;
+  }
 }
 
 .dash-left,
@@ -117,7 +312,7 @@
   justify-content: center;
   min-height: 0;
   text-align: center;
-  font-size: clamp(36px, 9vh, 110px);
+  font-size: clamp(30px, min(9vh, 12vw), 110px);
   font-weight: 800;
   line-height: 1.02;
 }
@@ -230,6 +425,16 @@
 .room .link-line[data-status="moving"] {
   stroke: var(--moving);
   stroke-width: 10;
+}
+
+.room .link-line[data-status="candidate"] {
+  stroke: var(--candidate);
+  stroke-width: 10;
+}
+
+.room .link-glow[data-on="candidate"] {
+  stroke: var(--candidate);
+  opacity: 0.22;
 }
 
 .room .link-line[data-status="event"] {
@@ -458,6 +663,14 @@
 }
 
 @media (max-width: 900px) {
+  body {
+    height: auto;
+  }
+
+  .resident {
+    min-height: calc(100vh - 60px);
+  }
+
   .dash {
     grid-template-columns: minmax(0, 1fr);
     height: auto;

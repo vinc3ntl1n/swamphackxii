@@ -56,12 +56,21 @@ class History:
         self.hub, self.mode, self.path = hub, mode, path
         self.sim = False
         self.sim_falls: set[int] = set()
-        if path.exists():
-            for line in path.read_text().splitlines()[-HISTORY_SHOWN:]:
-                try:
-                    self.hub.publish({"type": "history", **json.loads(line)})
-                except ValueError:
-                    continue
+        self.last_fall = self.last_notice = 0
+        if not path.exists():
+            return
+        lines = path.read_text().splitlines()
+        for i, line in enumerate(lines):
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(entry.get("fall"), int):
+                self.last_fall = max(self.last_fall, entry["fall"])
+            if entry.get("what") == "notify" and isinstance(entry.get("id"), int):
+                self.last_notice = max(self.last_notice, entry["id"])
+            if i >= len(lines) - HISTORY_SHOWN:
+                self.hub.publish({"type": "history", **entry})
 
     def add(self, t: float, what: str, **fields) -> None:
         fall = fields.get("fall")
@@ -81,7 +90,7 @@ class Notices:
 
     def __init__(self, hub: server.Hub, history: History) -> None:
         self.hub, self.history = hub, history
-        self.next_id = 1
+        self.next_id = history.last_notice + 1
         self.pending: dict[int, tuple[float, int]] = {}
 
     def send(self, t: float, to: str, kind: str, fall: int, text: str) -> None:
@@ -113,7 +122,7 @@ class Notices:
 class WebSink:
     def __init__(self, hub: server.Hub, history: History, notices: Notices) -> None:
         self.hub, self.history, self.notices = hub, history, notices
-        self.fall = 0
+        self.fall = history.last_fall
         self.fall_t: float | None = None
         self.alert_t: float | None = None
 

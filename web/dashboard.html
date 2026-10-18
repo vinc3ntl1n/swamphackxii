@@ -8,18 +8,34 @@
 <link rel="stylesheet" href="dashboard.css">
 </head>
 <body>
-<main class="dash">
-  <section class="dash-left" aria-label="Fall detection status">
+<header class="topbar">
+  <div class="toggle views" role="group" aria-label="View">
+    <button type="button" data-view="caregiver">Caregiver</button>
+    <button type="button" data-view="resident">Resident</button>
+  </div>
+  <span class="chip" id="source">–</span>
+  <span class="demo">
+    <span class="demo-label">Demo</span>
+    <button type="button" class="chip" id="simulate" disabled>Simulate fall</button>
+  </span>
+  <button type="button" class="chip sound" id="sound"></button>
+</header>
+
+<main class="dash" id="caregiver">
+  <section class="dash-left" aria-label="Fall Flow">
     <div class="status" id="status" data-tone="idle" role="status" aria-live="polite">
-      <div class="status-head"><span>ROOM STATUS</span><span class="status-tag" id="sim-tag" hidden>SIMULATED</span></div>
+      <div class="status-head"><span>FALL WATCH</span><span class="status-tag" id="sim-tag" hidden>SIMULATED</span></div>
       <div class="status-word" id="status-word">CONNECTING</div>
       <div class="status-sub" id="status-sub"></div>
       <div class="progress"><div class="progress-fill" id="status-progress"></div></div>
     </div>
+    <div class="motion" id="motion" aria-label="Motion Level per Link"></div>
     <div class="actions">
-      <button type="button" class="btn ok" id="ok" disabled>I'm OK</button>
-      <button type="button" class="btn" id="simulate" disabled>Simulate fall</button>
-      <button type="button" class="btn" id="reset" disabled>Reset</button>
+      <button type="button" class="btn primary" id="cancel" hidden>Cancel Countdown</button>
+      <button type="button" class="btn primary" id="resolve-handled" hidden>Resolve: handled</button>
+      <button type="button" class="btn" id="resolve-false" hidden>Resolve: false alarm</button>
+      <a class="btn" id="call" hidden>Call the Resident</a>
+      <span class="actions-note" id="actions-note">No action needed</span>
     </div>
     <div class="pair">
       <figure class="card room">
@@ -48,11 +64,9 @@
       </figure>
     </div>
   </section>
-  <section class="dash-right" aria-label="Live signal and events">
+  <section class="dash-right" aria-label="Live signal and history">
     <div class="chips" id="chips">
-      <span class="chip" id="source">–</span>
       <span class="chip alert" id="stale" hidden></span>
-      <button type="button" class="chip sound" id="sound"></button>
     </div>
     <figure class="card wave">
       <header>
@@ -70,11 +84,30 @@
       <div class="energy-plots" id="energy-plots"></div>
     </figure>
     <figure class="card log">
-      <header><h2>Event log</h2><span class="note">newest first</span></header>
+      <header>
+        <div class="toggle tabs" role="tablist" aria-label="Log">
+          <button type="button" role="tab" data-tab="live" aria-selected="true" aria-pressed="true">Live</button>
+          <button type="button" role="tab" data-tab="history" aria-selected="false" aria-pressed="false">History</button>
+        </div>
+        <span class="note" id="log-note">this run, newest first</span>
+      </header>
       <ol class="events" id="events"></ol>
+      <ol class="events" id="history" hidden></ol>
     </figure>
   </section>
 </main>
+
+<main class="resident" id="resident" hidden>
+  <div class="resident-card" id="resident-card" data-tone="calm" role="status" aria-live="assertive">
+    <div class="resident-word" id="resident-word">All good</div>
+    <div class="resident-sub" id="resident-sub">Fall watch is on</div>
+    <div class="resident-buttons" id="resident-buttons" hidden>
+      <button type="button" class="big ok" id="res-ok">I'm OK</button>
+      <button type="button" class="big help" id="res-help">I need help</button>
+    </div>
+  </div>
+</main>
+
 <script type="module">
 import { SignalBuffer, Waveform, EnergyChart, readTheme, watchTheme, connect } from "./signal.js";
 
@@ -83,6 +116,22 @@ const STALE_MS = 2000;
 const MAX_ROWS = 200;
 const BEEP_MS = 700;
 const LABELS = { fall: "FALL", walk: "walk", "sit-down": "sit-down" };
+const LOG_TEXT = { "Fall Candidate: stay still, deciding...": "Fall suspected: checking for movement…" };
+const NOTICE = {
+  check_in: "Check-in to the Resident", alert: "Alert to the Caregiver",
+  all_clear: "All-clear to the Caregiver", help: "Help Request to the Caregiver",
+};
+const DELIVERY = { sending: "sending…", sent: "✓ sent", failed: "✗ failed", not_delivered: "✗ not delivered" };
+const HISTORY_TEXT = {
+  confirmed_fall: (e) => `Confirmed Fall #${e.fall} · link ${e.links}${e.details ? ` · peak ${e.details.peak} · room change ${e.details.static_change}` : ""}`,
+  alert: (e) => `Alert for fall #${e.fall}`,
+  countdown_cancelled: (e) => `Countdown cancelled by the ${e.by === "resident" ? "Resident (I'm OK)" : "Caregiver"} · fall #${e.fall}`,
+  late_answer: (e) => `Late Answer: the Resident is OK, ${e.late_s} s after the Alert · fall #${e.fall}`,
+  resolved: (e) => `Alert resolved: ${e.reason === "false_alarm" ? "false alarm" : "handled"} · fall #${e.fall}`,
+  help_request: (e) => `Help Request from the Resident · fall #${e.fall}`,
+  called: (e) => `Caregiver called the Resident${e.fall ? ` · fall #${e.fall}` : ""}`,
+  stale_answer: (e) => `Stale Answer ignored (${e.answer}${e.fall != null ? ` for fall #${e.fall}` : ""})`,
+};
 
 const links = new Map();
 const empty = new SignalBuffer();
@@ -93,6 +142,8 @@ let conn = "connecting";
 let ever = false;
 let openedAt = performance.now();
 let pick = "auto";
+let view = new URLSearchParams(location.search).get("view") === "resident" ? "resident" : "caregiver";
+let tab = "live";
 let muted = false;
 let audio = null;
 let beepTimer = null;
@@ -104,6 +155,7 @@ function fresh() {
   return {
     cfg: null, source: null, ended: false, state: null, stateAt: 0, alarm: false,
     events: [], lastFall: null, lastVerdict: null, simTag: false,
+    notices: new Map(), historyRows: new Map(),
   };
 }
 
@@ -121,8 +173,8 @@ function linkFor(name) {
   canvas.setAttribute("role", "img");
   canvas.setAttribute("aria-label", `Motion energy of link ${name}`);
   plot.append(tag, canvas);
-  const plots = [...links.keys(), name].sort();
-  $("energy-plots").insertBefore(plot, $("energy-plots").children[plots.indexOf(name)] ?? null);
+  const names = [...links.keys(), name].sort();
+  $("energy-plots").insertBefore(plot, $("energy-plots").children[names.indexOf(name)] ?? null);
   l = { name, buf, arrival: null, movedAt: null, plot, chart: new EnergyChart(canvas, buf) };
   links.set(name, l);
   renderPicker();
@@ -133,6 +185,10 @@ const isFresh = (l, nowMs) => l.arrival != null && nowMs - l.arrival < STALE_MS;
 
 function clock(t) {
   return new Date(t * 1000).toLocaleTimeString([], { hour12: false });
+}
+
+function day(t) {
+  return new Date(t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 }
 
 function onMessage(msg) {
@@ -155,11 +211,10 @@ function onMessage(msg) {
   } else if (msg.type === "alarm") st.alarm = !!msg.on;
   else if (msg.type === "event") onEvent(msg);
   else if (msg.type === "log") {
-    if (!msg.text.startsWith("Motion Event:")) addRow(msg.t, null, msg.text, "note");
-  } else if (msg.type === "alert") {
-    const text = msg.kind === "caregiver" ? "Caregiver alert sent" : "Asked the resident: “Are you OK?”";
-    addRow(msg.t, null, `📣 ${text}`, "note");
-  }
+    if (!msg.text.startsWith("Motion Event:")) addRow($("events"), msg.t, null, LOG_TEXT[msg.text] ?? msg.text, "note");
+  } else if (msg.type === "notify") onNotify(msg);
+  else if (msg.type === "delivery") onDelivery(msg);
+  else if (msg.type === "history") onHistory(msg);
 }
 
 function onState(s) {
@@ -172,6 +227,7 @@ function onState(s) {
     l.arrival = l.movedAt = null;
   }
   $("events").replaceChildren();
+  $("history").replaceChildren();
   renderWhy();
   openedAt = performance.now();
 }
@@ -190,16 +246,59 @@ function onEvent(ev) {
   if (ev.why === "cut_short") parts.push("kept moving, so not a fall");
   if (ev.confidence < 1 && ev.why === "classified") parts.push(`confidence ${ev.confidence}`);
   if (ev.sim) parts.push("simulated");
-  addRow(ev.t, ev.label, parts.join(" · "), "event");
+  addRow($("events"), ev.t, ev.label, parts.join(" · "), "event");
   renderWhy();
 }
 
-function addRow(t, label, text, kind) {
+function noticeText(n, status) {
+  return `📣 ${NOTICE[n.kind] ?? n.kind} · ${DELIVERY[status] ?? status}`;
+}
+
+function onNotify(n) {
+  const row = addRow($("events"), n.t, null, noticeText(n, n.status), "note notice");
+  row.dataset.status = n.status;
+  st.notices.set(n.id, { n, row });
+}
+
+function onDelivery(d) {
+  const known = st.notices.get(d.id);
+  if (known) {
+    known.row.dataset.status = d.status;
+    known.row.lastChild.textContent = noticeText(known.n, d.status);
+  }
+  const hist = st.historyRows.get(d.id);
+  if (hist) {
+    hist.row.dataset.status = d.status;
+    hist.row.lastChild.textContent = noticeText(hist.e, d.status) + hist.suffix;
+  }
+}
+
+function onHistory(e) {
+  if (e.what === "delivery") {
+    onDelivery(e);
+    return;
+  }
+  if (e.what === "alert") return;
+  let text;
+  let label = null;
+  if (e.what === "notify") text = noticeText(e, e.status);
+  else if (HISTORY_TEXT[e.what]) text = HISTORY_TEXT[e.what](e);
+  else text = e.what;
+  if (e.what === "confirmed_fall") label = "fall";
+  const suffix = e.mode && e.mode !== "live" ? ` · ${e.mode === "sim" ? "simulated" : "replay"}` : "";
+  const row = addRow($("history"), e.t, label, text + suffix, label ? "event" : "note", day);
+  if (e.what === "notify") {
+    row.dataset.status = e.status;
+    st.historyRows.set(e.id, { e, row, suffix });
+  }
+}
+
+function addRow(list, t, label, text, kind, when = clock) {
   const li = document.createElement("li");
   li.className = kind;
   const time = document.createElement("span");
   time.className = "time";
-  time.textContent = clock(t);
+  time.textContent = when(t);
   const pill = document.createElement("span");
   if (label) {
     pill.className = "pill";
@@ -210,9 +309,9 @@ function addRow(t, label, text, kind) {
   body.className = "nums";
   body.textContent = text;
   li.append(time, pill, body);
-  const list = $("events");
   list.prepend(li);
   while (list.children.length > MAX_ROWS) list.lastChild.remove();
+  return li;
 }
 
 function bar(label, value, limit, unit) {
@@ -263,14 +362,14 @@ function renderWhy() {
   $("why-title").textContent = !ev || ev.label === "fall" ? "Why it's a fall" : "Why it's not a fall";
   if (!ev || !cfg) {
     const rule = cfg ? `peak ≥ ${cfg.t_fall} and room change ≥ ${cfg.t_static}` : "a hard movement and a changed room";
-    box.replaceChildren(para("why-empty", `No Motion Event yet. A fall needs ${rule}, then ${cfg ? cfg.stillness_s : 4} s of stillness.`));
+    box.replaceChildren(para("why-empty", `No Motion Event yet. A fall needs ${rule}, then ${cfg ? cfg.stillness_s : 4} s without movement.`));
     return;
   }
   const d = ev.details;
   const rows = [para("why-meta", `${clock(ev.t)} · link ${ev.links} · ${LABELS[ev.label] ?? ev.label}${ev.sim ? " · simulated" : ""}`)];
   if (d.peak != null) {
     rows.push(bar("Peak motion energy", d.peak, cfg.t_fall, "T_FALL"));
-    rows.push(bar("Room change (static_change)", d.static_change, cfg.t_static, "T_STATIC"));
+    rows.push(bar("Room Change (static_change)", d.static_change, cfg.t_static, "T_STATIC"));
   }
   let foot;
   if (ev.why === "moved_again") foot = `Moved again within the ${cfg.stillness_s} s Stillness Window, so not a fall.`;
@@ -293,37 +392,49 @@ function serverNow(nowMs) {
   return st.state ? st.state.now + (nowMs - st.stateAt) / 1000 : null;
 }
 
+function flowState() {
+  return st.state ? st.state.state : "IDLE";
+}
+
+function timeLeft(nowMs) {
+  const now = serverNow(nowMs);
+  if (!st.state || st.state.deadline == null || now == null) return null;
+  const span = Math.max(0.1, st.state.deadline - st.state.t);
+  const left = Math.max(0, st.state.deadline - now);
+  return { left, span, secs: Math.ceil(left) };
+}
+
 function statusFor(nowMs) {
   if (conn !== "open") {
     return ever ? { tone: "idle", word: "DISCONNECTED", sub: "run.py stopped? check the terminal" }
       : { tone: "idle", word: "CONNECTING", sub: "" };
   }
-  const s = st.state ? st.state.state : "IDLE";
-  const now = serverNow(nowMs);
-  if ((s === "FALL_CANDIDATE" || s === "COUNTDOWN") && st.state.deadline != null && now != null) {
-    const span = Math.max(0.1, st.state.deadline - st.state.t);
-    const left = Math.max(0, st.state.deadline - now);
-    if (s === "FALL_CANDIDATE") {
-      return { tone: "candidate", word: "FALL CANDIDATE", sub: `hold still… deciding in ${Math.ceil(left)} s`, progress: 1 - left / span };
-    }
-    return { tone: "countdown", word: "FALL DETECTED", sub: `alerting caregiver in ${Math.ceil(left)} s`, progress: left / span };
+  const s = flowState();
+  const tl = timeLeft(nowMs);
+  if (s === "FALL_CANDIDATE" && tl) {
+    return { tone: "candidate", word: "FALL SUSPECTED", sub: `checking for movement… ${tl.secs} s`, progress: 1 - tl.left / tl.span };
   }
-  if (s === "ALERTED") return { tone: "alerted", word: "CAREGIVER ALERTED", sub: `sent at ${clock(st.state.t)}` };
+  if (s === "COUNTDOWN" && tl) {
+    return { tone: "countdown", word: "FALL DETECTED", sub: `Check-in sent · Alert in ${tl.secs} s`, progress: tl.left / tl.span };
+  }
+  if (s === "ALERTED") return { tone: "alerted", word: "CAREGIVER ALERTED", sub: `at ${clock(st.state.t)} · resolve when handled` };
   const live = [...links.values()].filter((l) => isFresh(l, nowMs));
-  const moving = live.filter((l) => l.buf.latest()?.level === "moving").map((l) => l.name);
-  if (moving.length) return { tone: "moving", word: "MOVING", sub: `on link ${moving.join(" + ")}` };
   if (live.some((l) => l.buf.latest()?.level === "calibrating")) {
     return { tone: "calibrating", word: "CALIBRATING", sub: "keep the area still for 10 s" };
   }
-  if (st.state && st.state.sim) return { tone: "idle", word: "IDLE", sub: "simulated fall playing…" };
+  if (st.state && st.state.sim) return { tone: "idle", word: "ALL QUIET", sub: "Simulated Fall playing…" };
   if (!live.length) {
-    return { tone: "idle", word: "IDLE", sub: st.ended ? "replay finished · Simulate fall still works" : "waiting for packets" };
+    return { tone: "idle", word: "ALL QUIET", sub: st.ended ? "replay finished · Simulate fall still works" : "waiting for packets" };
   }
-  return { tone: "idle", word: "IDLE", sub: "all quiet" };
+  return { tone: "idle", word: "ALL QUIET", sub: "no fall in progress" };
 }
 
 function setText(el, text) {
   if (el.textContent !== text) el.textContent = text;
+}
+
+function show(el, on) {
+  if (el.hidden === on) el.hidden = !on;
 }
 
 function renderStatus(nowMs) {
@@ -334,26 +445,51 @@ function renderStatus(nowMs) {
   setText($("status-sub"), c.sub);
   $("status-progress").style.width = `${(Math.min(1, Math.max(0, c.progress ?? 0)) * 100).toFixed(1)}%`;
   $("sim-tag").hidden = !st.simTag;
-  const s = st.state ? st.state.state : "IDLE";
+  const s = flowState();
   const open = conn === "open";
-  $("ok").disabled = !open || s !== "COUNTDOWN";
-  $("simulate").disabled = !open || s !== "IDLE" || !!(st.state && st.state.sim);
-  $("reset").disabled = !open || s === "IDLE";
+  const phone = st.cfg && st.cfg.resident_phone;
+  show($("cancel"), open && s === "COUNTDOWN");
+  show($("resolve-handled"), open && s === "ALERTED");
+  show($("resolve-false"), open && s === "ALERTED");
+  show($("call"), open && !!phone && (s === "COUNTDOWN" || s === "ALERTED"));
+  if (phone && $("call").getAttribute("href") !== `tel:${phone}`) $("call").setAttribute("href", `tel:${phone}`);
+  show($("actions-note"), !open || (s !== "COUNTDOWN" && s !== "ALERTED"));
+  setText($("actions-note"), s === "FALL_CANDIDATE" ? "Waiting for the Stillness Window" : "No action needed");
+}
+
+function renderMotion(nowMs) {
+  const box = $("motion");
+  for (const l of [...links.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+    let pill = box.querySelector(`[data-link="${l.name}"]`);
+    if (!pill) {
+      pill = document.createElement("span");
+      pill.className = "chip";
+      pill.dataset.link = l.name;
+      pill.innerHTML = '<span class="dot"></span><span></span>';
+      box.append(pill);
+    }
+    const f = isFresh(l, nowMs) ? l.buf.latest() : null;
+    const level = f ? f.level : "";
+    if (pill.dataset.level !== level) pill.dataset.level = level;
+    let text = `${l.name} · no data`;
+    if (f) text = `${l.name} · ${f.level}${f.energy != null ? ` ${f.energy.toFixed(1)}×` : ""}`;
+    setText(pill.lastChild, text);
+  }
 }
 
 function renderMap(nowMs) {
-  const s = st.state ? st.state.state : "IDLE";
+  const s = flowState();
   for (const name of ["A", "B"]) {
     const l = links.get(name);
     const f = l && isFresh(l, nowMs) ? l.buf.latest() : null;
     let status = f ? (f.level === "moving" ? "moving" : "quiet") : "none";
     if (s === "COUNTDOWN" || s === "ALERTED") {
       if (st.lastFall && st.lastFall.links.split("+").includes(name)) status = "event";
-    } else if (s === "FALL_CANDIDATE" && l && l.movedAt != null && l.movedAt >= st.state.t - 10) status = "event";
+    } else if (s === "FALL_CANDIDATE" && l && l.movedAt != null && l.movedAt >= st.state.t - 10) status = "candidate";
     const line = $(`line-${name}`);
     if (line.dataset.status !== status) line.dataset.status = status;
     const glow = $(`glow-${name}`);
-    const on = status === "moving" || status === "event" ? status : "";
+    const on = status === "moving" || status === "event" || status === "candidate" ? status : "";
     if (glow.dataset.on !== on) glow.dataset.on = on;
     let text = "no data";
     if (f) text = f.energy != null ? `${f.energy.toFixed(1)}× ${f.level}` : f.level;
@@ -363,8 +499,7 @@ function renderMap(nowMs) {
 
 function renderChips(nowMs) {
   const source = $("source");
-  const mode = st.source ? (st.ended ? `${st.source} · ended` : st.source) : "–";
-  setText(source, mode);
+  setText(source, st.source ? (st.ended ? `${st.source} · ended` : st.source) : "–");
   if (source.dataset.source !== (st.source ?? "")) source.dataset.source = st.source ?? "";
   for (const l of links.values()) {
     let chip = $(`chip-${l.name}`);
@@ -372,15 +507,11 @@ function renderChips(nowMs) {
       chip = document.createElement("span");
       chip.className = "chip";
       chip.id = `chip-${l.name}`;
-      chip.innerHTML = '<span class="dot"></span><span></span>';
       $("chips").insertBefore(chip, $("stale"));
     }
     const f = isFresh(l, nowMs) ? l.buf.latest() : null;
-    const level = f ? f.level : "";
-    if (chip.dataset.level !== level) chip.dataset.level = level;
-    const hz = f && f.hz != null ? `${f.hz.toFixed(0)}/s` : "";
-    const text = f ? `${l.name} · ${[hz, `${f.rssi} dBm`, f.level].filter(Boolean).join(" · ")}` : `${l.name} · no data`;
-    setText(chip.lastChild, text);
+    const hz = f && f.hz != null ? `${f.hz.toFixed(0)} packets/s` : "";
+    setText(chip, f ? `${l.name} · ${[hz, `${f.rssi} dBm`].filter(Boolean).join(" · ")}` : `${l.name} · no data`);
   }
   const stale = $("stale");
   let text = "";
@@ -392,6 +523,32 @@ function renderChips(nowMs) {
   }
   stale.hidden = !text;
   setText(stale, text);
+}
+
+function renderResident(nowMs) {
+  const s = flowState();
+  const tl = timeLeft(nowMs);
+  let tone = "calm";
+  let word = "All good";
+  let sub = conn === "open" ? "Fall watch is on" : "Connecting…";
+  let buttons = false;
+  if (conn === "open" && s === "COUNTDOWN") {
+    tone = "ask";
+    word = "Are you OK?";
+    sub = tl ? `Your caregiver will be told in ${tl.secs} s` : "Your caregiver will be told soon";
+    buttons = true;
+  } else if (conn === "open" && s === "ALERTED") {
+    tone = "told";
+    word = "Your caregiver has been told";
+    sub = "Help is on the way. If you're OK, press I'm OK.";
+    buttons = true;
+  }
+  const card = $("resident-card");
+  if (card.dataset.tone !== tone) card.dataset.tone = tone;
+  setText($("resident-word"), word);
+  setText($("resident-sub"), sub);
+  show($("resident-buttons"), buttons);
+  show($("res-help"), s === "COUNTDOWN");
 }
 
 function waveLink(nowMs) {
@@ -476,36 +633,74 @@ function renderSound() {
   }
 }
 
+function setView(next) {
+  view = next;
+  $("caregiver").hidden = view !== "caregiver";
+  $("resident").hidden = view !== "resident";
+  document.body.dataset.view = view;
+  for (const b of document.querySelectorAll(".views button")) b.setAttribute("aria-pressed", String(b.dataset.view === view));
+  const url = new URL(location.href);
+  if (view === "resident") url.searchParams.set("view", "resident");
+  else url.searchParams.delete("view");
+  history.replaceState(null, "", url);
+}
+
+function setTab(next) {
+  tab = next;
+  $("events").hidden = tab !== "live";
+  $("history").hidden = tab !== "history";
+  setText($("log-note"), tab === "live" ? "this run, newest first" : "Confirmed Falls, Check-ins and Alerts across runs");
+  for (const b of document.querySelectorAll(".tabs button")) {
+    b.setAttribute("aria-pressed", String(b.dataset.tab === tab));
+    b.setAttribute("aria-selected", String(b.dataset.tab === tab));
+  }
+}
+
 function loop() {
   const nowMs = performance.now();
-  let now = null;
-  for (const l of links.values()) {
-    const t = l.buf.now(nowMs);
-    if (t != null && (now == null || t > now)) now = t;
+  if (view === "caregiver") {
+    let now = null;
+    for (const l of links.values()) {
+      const t = l.buf.now(nowMs);
+      if (t != null && (now == null || t > now)) now = t;
+    }
+    const shown = waveLink(nowMs);
+    wave.buffer = shown ? shown.buf : empty;
+    setText($("wave-note"), shown ? `link ${shown.name} · 8 subcarriers, flat = still, swings = movement` : "waiting for packets");
+    wave.draw(now, [], theme, null);
+    const withData = [...links.values()].filter((l) => l.buf.latest());
+    for (const l of links.values()) {
+      l.plot.hidden = withData.length ? !l.buf.latest() : l.name !== "A";
+      if (!l.plot.hidden) l.chart.draw(now, eventMarks(l.name), theme, null, st.cfg);
+    }
+    renderStatus(nowMs);
+    renderMotion(nowMs);
+    renderMap(nowMs);
+    renderChips(nowMs);
+  } else {
+    renderResident(nowMs);
+    renderChips(nowMs);
   }
-  const shown = waveLink(nowMs);
-  wave.buffer = shown ? shown.buf : empty;
-  setText($("wave-note"), shown ? `link ${shown.name} · 8 subcarriers, flat = still, swings = movement` : "waiting for packets");
-  wave.draw(now, [], theme, null);
-  const withData = [...links.values()].filter((l) => l.buf.latest());
-  for (const l of links.values()) {
-    l.plot.hidden = withData.length ? !l.buf.latest() : l.name !== "A";
-    if (!l.plot.hidden) l.chart.draw(now, eventMarks(l.name), theme, null, st.cfg);
-  }
-  renderStatus(nowMs);
-  renderMap(nowMs);
-  renderChips(nowMs);
+  $("simulate").disabled = conn !== "open" || flowState() !== "IDLE" || !!(st.state && st.state.sim);
   renderSound();
   requestAnimationFrame(loop);
 }
 
 const link = connect(onMessage, onState);
-for (const [id, cmd] of [["ok", "cancel"], ["simulate", "simulate"], ["reset", "reset"]]) {
+const commands = [
+  ["cancel", { cmd: "cancel" }], ["resolve-handled", { cmd: "resolve", reason: "handled" }],
+  ["resolve-false", { cmd: "resolve", reason: "false_alarm" }], ["simulate", { cmd: "simulate" }],
+  ["call", { cmd: "call" }], ["res-ok", { cmd: "ok" }], ["res-help", { cmd: "help" }],
+];
+for (const [id, msg] of commands) {
   $(id).addEventListener("click", () => {
     ensureAudio();
-    link.send({ cmd });
+    const answer = msg.cmd === "ok" || msg.cmd === "help";
+    link.send(answer && st.state ? { ...msg, fall: st.state.fall } : msg);
   });
 }
+for (const b of document.querySelectorAll(".views button")) b.addEventListener("click", () => setView(b.dataset.view));
+for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("click", () => setTab(b.dataset.tab));
 $("sound").addEventListener("click", () => {
   const blocked = !audio || audio.state !== "running";
   ensureAudio();
@@ -520,6 +715,8 @@ document.addEventListener("keydown", ensureAudio);
 watchTheme(() => {
   theme = readTheme();
 });
+setView(view);
+setTab(tab);
 renderWhy();
 renderPicker();
 requestAnimationFrame(loop);
