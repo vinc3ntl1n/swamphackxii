@@ -11,19 +11,20 @@ import time
 import webbrowser
 from collections import deque
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.detection.motion import FrameInfo
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 HOST = "127.0.0.1"
-STICKY = ("source", "config")
+STICKY = ("source", "config", "session")
 KEPT = ("record",)
 KEPT_MAX = 2000
 BACKLOG_S = 60.0
@@ -41,7 +42,12 @@ class Hub:
         self.backlog: deque[tuple[int, float, str]] = deque()
         self.clients: dict[asyncio.Queue[str], int] = {}
         self.loop: asyncio.AbstractEventLoop | None = None
-        self.actions: dict[str, Callable[[], bool]] = {}
+        self.actions: dict[str, Callable[..., bool]] = {}
+
+    def reset_records(self) -> None:
+        with self.lock:
+            self.kept.clear()
+            self.backlog.clear()
 
     def publish(self, msg: dict) -> None:
         text = json.dumps(msg, separators=(",", ":"), allow_nan=False)
@@ -64,9 +70,11 @@ class Hub:
         queue: asyncio.Queue[str] = asyncio.Queue(QUEUE_SIZE)
         with self.lock:
             self.loop = asyncio.get_running_loop()
-            old = [*self.sticky.values(), *self.kept, *((s, x) for s, _, x in self.backlog)]
+            session = self.sticky.get("session")
+            old = [*(value for key, value in self.sticky.items() if key != "session"),
+                   *self.kept, *((s, x) for s, _, x in self.backlog)]
             self.clients[queue] = self.seq
-        return queue, [text for _, text in sorted(old)]
+        return queue, ([session[1]] if session is not None else []) + [text for _, text in sorted(old)]
 
     def leave(self, queue: asyncio.Queue[str]) -> None:
         self.clients.pop(queue, None)
@@ -147,6 +155,26 @@ async def _send(client: WebSocket, queue: asyncio.Queue[str], snapshot: list[str
             await client.send_text(await queue.get())
 
 
+class RecordingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: Literal["fall", "sit-down", "walk", "empty"]
+    n: int = Field(default=10, ge=1, le=1000, strict=True)
+    split: Literal["train", "test"] = "train"
+    gap: float = Field(default=8.0, ge=3, le=300, allow_inf_nan=False)
+    performer: str = Field(default="vincent", min_length=1, max_length=100)
+    spot: str = Field(default="test-room", min_length=1, max_length=100)
+
+
+def action_allowed(request: Request) -> Response | None:
+    port = request.scope["server"][1]
+    if request.headers.get("host") not in (f"127.0.0.1:{port}", f"localhost:{port}"):
+        return Response(status_code=403)
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+        return Response(status_code=415)
+    return None
+
+
 def make_app(hub: Hub) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -162,12 +190,26 @@ def make_app(hub: Hub) -> FastAPI:
 
     @app.post("/calibrate")
     async def calibrate(request: Request) -> Response:
-        port = request.scope["server"][1]
-        if request.headers.get("host") not in (f"127.0.0.1:{port}", f"localhost:{port}"):
-            return Response(status_code=403)
-        if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
-            return Response(status_code=415)
+        denied = action_allowed(request)
+        if denied is not None:
+            return denied
         action = hub.actions.get("calibrate")
+        return Response(status_code=202 if action is not None and action() else 409)
+
+    @app.post("/session/start")
+    async def start_session(request: Request, settings: RecordingRequest) -> Response:
+        denied = action_allowed(request)
+        if denied is not None:
+            return denied
+        action = hub.actions.get("start")
+        return Response(status_code=202 if action is not None and action(settings.model_dump()) else 409)
+
+    @app.post("/session/stop")
+    async def stop_session(request: Request) -> Response:
+        denied = action_allowed(request)
+        if denied is not None:
+            return denied
+        action = hub.actions.get("stop")
         return Response(status_code=202 if action is not None and action() else 409)
 
     @app.websocket("/ws")

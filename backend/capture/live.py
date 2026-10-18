@@ -46,11 +46,11 @@ def receivers(port: str | None, port_b: str | None) -> dict[str, str]:
     return find_receivers()
 
 
-def _read_port(link: str, port: str, out: queue.Queue) -> None:
-    while True:
+def _read_port(link: str, port: str, out: queue.Queue, stop: threading.Event) -> None:
+    while not stop.is_set():
         try:
             with serial.Serial(port, 921600, timeout=1) as ser:
-                while True:
+                while not stop.is_set():
                     raw = ser.readline()
                     if not raw:
                         continue
@@ -59,19 +59,26 @@ def _read_port(link: str, port: str, out: queue.Queue) -> None:
                     if parse_line(line, t) is not None:
                         out.put((t, link, line))
         except (serial.SerialException, OSError):
+            if stop.is_set():
+                return
             print(f"Lost receiver {link} ({port}); plug it back in. Retrying...", flush=True)
-            time.sleep(1.0)
+            stop.wait(1.0)
 
 
-def live_lines(ports: dict[str, str], log_path: Path | None = None) -> Iterator[tuple[float, str, str]]:
+def live_lines(ports: dict[str, str], log_path: Path | None = None,
+               stop: threading.Event | None = None) -> Iterator[tuple[float, str, str]]:
+    stop = stop if stop is not None else threading.Event()
     out: queue.Queue = queue.Queue()
+    threads = []
     for link, port in ports.items():
-        threading.Thread(target=_read_port, args=(link, port, out), name=f"receiver-{link}",
-                         daemon=True).start()
+        thread = threading.Thread(target=_read_port, args=(link, port, out, stop), name=f"receiver-{link}",
+                                  daemon=True)
+        thread.start()
+        threads.append(thread)
     log = open(log_path, "a") if log_path else None
     last = 0.0
     try:
-        while True:
+        while not stop.is_set():
             try:
                 t, link, line = out.get(timeout=1.0)
             except queue.Empty:
@@ -81,6 +88,9 @@ def live_lines(ports: dict[str, str], log_path: Path | None = None) -> Iterator[
                 log.write(log_row(t, link, line))
             yield t, link, line
     finally:
+        stop.set()
+        for thread in threads:
+            thread.join(2)
         if log:
             log.close()
 

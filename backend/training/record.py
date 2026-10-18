@@ -6,7 +6,6 @@ import itertools
 import json
 import shutil
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -30,6 +29,10 @@ GO_WORDS = {"fall": "Go! Fall.", "sit-down": "Go! Sit down.", "walk": "Go! Walk.
 HOLD_WORDS = {"fall": "Stay down. Hold still.", "sit-down": "Stay seated. Hold still."}
 
 Lines = Iterator[tuple[float, str, str]]
+
+
+class SessionStopped(Exception):
+    pass
 
 
 def beep(name: str) -> None:
@@ -79,24 +82,32 @@ class Speaker:
 
 
 class Reader(threading.Thread):
-    def __init__(self, lines) -> None:
+    def __init__(self, lines, stop: threading.Event | None = None) -> None:
         super().__init__(daemon=True)
         self.lines = lines
         self.buf: deque[tuple[float, str, str]] = deque()
         self.lock = threading.Lock()
         self.ended = False
         self.count = 0
+        self.stop = stop if stop is not None else threading.Event()
 
     def run(self) -> None:
         try:
             for t, link, line in self.lines:
+                if self.stop.is_set():
+                    break
                 with self.lock:
                     self.buf.append((t, link, line))
                     self.count += 1
                     while t - self.buf[0][0] > 60:
                         self.buf.popleft()
         finally:
+            self.lines.close()
             self.ended = True
+
+    def close(self) -> None:
+        self.stop.set()
+        self.join(4)
 
     def clock(self) -> float:
         with self.lock:
@@ -120,11 +131,15 @@ class Reader(threading.Thread):
 
     def wait_until(self, target: float, cut: threading.Event | None = None) -> bool:
         last_change, last = time.monotonic(), self.clock()
+        if self.stop.is_set():
+            raise SessionStopped()
         while self.clock() < target:
+            if self.stop.is_set():
+                raise SessionStopped()
             if cut is not None and cut.is_set():
                 return False
             if self.ended:
-                sys.exit("The packet stream ended before the session finished.")
+                raise RuntimeError("The packet stream ended before the session finished.")
             time.sleep(0.02)
             if self.clock() != last:
                 last_change, last = time.monotonic(), self.clock()
@@ -135,7 +150,8 @@ class Reader(threading.Thread):
 
 
 class View:
-    def __init__(self, port: int | None, cal: dict | None, label: str, n: int, link: str, voice: Speaker) -> None:
+    def __init__(self, port: int | None, cal: dict | None, label: str, n: int, link: str, voice: Speaker,
+                 hub=None) -> None:
         self.hub = self.feed = None
         self.base = {"label": label, "n": n}
         self.link = link
@@ -147,6 +163,11 @@ class View:
         self.asked = threading.Event()
         self.busy = self.ended = self.closing = False
         self.voice = voice
+        if hub is not None:
+            from backend import server
+            self.hub, self.feed = hub, server.SignalFeed(hub)
+            hub.actions["calibrate"] = self.ask
+            return
         if port is None:
             return
         try:
@@ -236,6 +257,7 @@ class View:
     def close(self) -> None:
         self.voice.close()
         if self.hub is not None:
+            self.feed.flush()
             self.hub.close(1.0)
 
     def _fail(self, e: Exception) -> None:
@@ -293,7 +315,9 @@ def session_args(ap: argparse.ArgumentParser) -> None:
 
 
 def open_session(args: argparse.Namespace, label: str, n: int,
-                 cal: dict | None) -> tuple[View, Reader, dict[str, str] | None]:
+                 cal: dict | None, hub=None,
+                 stop: threading.Event | None = None) -> tuple[View, Reader, dict[str, str] | None]:
+    stop = stop if stop is not None else threading.Event()
     ports = None
     if args.replay:
         from backend.capture.replay import replay_lines
@@ -301,10 +325,10 @@ def open_session(args: argparse.Namespace, label: str, n: int,
     else:
         from backend.capture.live import live_lines, receivers
         ports = receivers(args.port, args.port_b)
-        lines = live_lines(ports)
+        lines = live_lines(ports, stop=stop)
     view_link = DEFAULT_LINK if args.replay or DEFAULT_LINK in ports else min(ports)
-    view = View(None if args.no_view else args.view_port, cal, label, n, view_link, Speaker(not args.no_voice))
-    reader = Reader(view.watch(lines))
+    view = View(None if args.no_view else args.view_port, cal, label, n, view_link, Speaker(not args.no_voice), hub)
+    reader = Reader(view.watch(lines), stop)
     reader.start()
     view.publish({"type": "source", "mode": "REPLAY" if args.replay else "LIVE"})
     view.publish({"type": "config", "t_on": config.T_ON, "t_off": config.T_OFF,
@@ -328,7 +352,7 @@ def heard_links(reader: Reader, ports: dict[str, str] | None, verb: str) -> list
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("label", choices=recordings.LABELS)
+    ap.add_argument("label", choices=recordings.LABELS, nargs="?", help="start this recording batch immediately")
     ap.add_argument("--n", type=int, default=10, help="how many clips to record")
     ap.add_argument("--split", choices=("train", "test"), default="train")
     ap.add_argument("--gap", type=float, default=8.0, help="seconds to get in position")
@@ -339,12 +363,23 @@ def main() -> None:
     session_args(ap)
     args = ap.parse_args()
 
+    if not args.no_view:
+        from backend.training.dashboard import run
+        run(args)
+    elif args.label is None:
+        ap.error("label is required with --no-view")
+    else:
+        run_recording(args)
+
+
+def run_recording(args: argparse.Namespace, hub=None, stop: threading.Event | None = None) -> None:
     cal_path = args.root.parent / recordings.CALIBRATION_FILE
+    cal_path.parent.mkdir(parents=True, exist_ok=True)
     saved = json.loads(cal_path.read_text()) if cal_path.exists() else None
     saved_cals = {link: cal for link, cal in recordings.per_link(saved["calibration"]).items()
                   if cal.get("measure") == MEASURE} if saved else {}
 
-    view, reader, ports = open_session(args, args.label, args.n, saved_cals or None)
+    view, reader, ports = open_session(args, args.label, args.n, saved_cals or None, hub, stop)
     view.voice.prepare([*COUNT_WORDS.values(), GO_WORDS[args.label]])
 
     detector = ThresholdDetector()
@@ -429,9 +464,10 @@ def main() -> None:
               f"{args.n - bad} clean, {bad} flagged")
         view.voice.say(f"Done. {args.n - bad} clean, {bad} flagged.", cut=False)
         finished = True
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SessionStopped):
         print()
     finally:
+        reader.close()
         view.end(reader.clock(), clip=recorded, clean=recorded - bad, flagged=bad, stopped=not finished)
         view.close()
 
