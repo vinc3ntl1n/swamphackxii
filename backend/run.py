@@ -48,6 +48,10 @@ def main() -> None:
     args = ap.parse_args()
 
     cals = None
+    if args.replay and not os.path.exists(args.replay):
+        ap.exit(1, f"No such file: {args.replay}\n"
+                   "Recordings live in R2 now: run python -m backend.sync pull first, "
+                   "or replay backend/assets/sim_fall.log.gz.\n")
     if args.replay:
         from backend.capture.replay import replay_frames
         from backend.dashboard import HOLD_S, held, recording_calibration
