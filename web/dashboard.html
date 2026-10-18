@@ -379,7 +379,7 @@ function renderChips(nowMs) {
     const level = f ? f.level : "";
     if (chip.dataset.level !== level) chip.dataset.level = level;
     const hz = f && f.hz != null ? `${f.hz.toFixed(0)}/s` : "";
-    const text = f ? `link ${l.name} · ${[hz, `${f.rssi} dBm`, f.level].filter(Boolean).join(" · ")}` : `link ${l.name} · no data`;
+    const text = f ? `${l.name} · ${[hz, `${f.rssi} dBm`, f.level].filter(Boolean).join(" · ")}` : `${l.name} · no data`;
     setText(chip.lastChild, text);
   }
   const stale = $("stale");
@@ -471,7 +471,7 @@ function renderSound() {
   const btn = $("sound");
   if (btn.dataset.sound !== mode) {
     btn.dataset.sound = mode;
-    btn.textContent = { muted: "🔇 Alarm muted", on: "🔊 Alarm sound on", blocked: "🔊 Click to allow alarm sound" }[mode];
+    btn.textContent = { muted: "🔇 Alarm muted", on: "🔊 Alarm on", blocked: "🔊 Allow alarm sound" }[mode];
     btn.setAttribute("aria-pressed", String(!muted));
   }
 }
