@@ -29,6 +29,7 @@ STALL_S = 0.3
 STATE_EVERY_S = 0.5
 SIM_FEED_AFTER_S = 2.0
 DELIVERY_WAIT_S = 10.0
+HELP_COOLDOWN_S = 3.0
 HISTORY_SHOWN = 300
 RESOLVE_REASONS = ("false_alarm", "handled")
 
@@ -303,6 +304,7 @@ class Dashboard:
         self.sent: tuple | None = None
         self.sent_at = 0.0
         self.failed = False
+        self.help_at = -1e9
 
     def on_command(self, msg: dict) -> None:
         self.commands.put(msg)
@@ -399,6 +401,10 @@ class Dashboard:
             self.sink.log(now, f"Stale Answer ignored: {cmd} for fall {fall if fall is not None else '?'}")
             return
         if cmd == "help":
+            if time.monotonic() - self.help_at < HELP_COOLDOWN_S:
+                self.sink.log(now, f"Help Request ignored: another one came in under {HELP_COOLDOWN_S:g} s ago")
+                return
+            self.help_at = time.monotonic()
             web.history.add(now, "help_request", fall=web.fall)
             self.sink.log(now, "Help Request from the Resident")
             escalate = getattr(flow, "escalate", None)
