@@ -53,7 +53,6 @@
 
 <header class="topbar">
   <span class="brand"><img class="brand-logo" src="gator_side.png" alt=""><pulse-wifi class="brand-wifi" data-conn state="off" dir="70"></pulse-wifi>pulse.</span>
-  <span class="brand"><img class="brand-logo" src="gator_side.png" alt=""><pulse-wifi class="brand-wifi" data-conn state="off" dir="70"></pulse-wifi>pulse.</span>
   <div class="toggle views" role="group" aria-label="View">
     <span class="views-thumb" aria-hidden="true"></span>
     <button type="button" data-view="caregiver">Caregiver</button>
@@ -68,10 +67,8 @@
 <main class="care" id="caregiver">
   <section class="care-card glass-card" id="cg-card" data-tone="calm" role="status" aria-live="polite">
     <div class="care-gator" id="cg-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 0deg 130deg" camera-orbit="0deg 55deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div><pulse-wifi class="gator-wifi" data-conn state="off" bands="4" spread="70" pixel="1.5"></pulse-wifi></div>
-    <div class="care-gator" id="cg-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 0deg 130deg" camera-orbit="0deg 55deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div><pulse-wifi class="gator-wifi" data-conn state="off" bands="4" spread="70" pixel="1.5"></pulse-wifi></div>
     <div class="care-body">
       <span class="care-pill" id="cg-pill">Watching</span>
-      <span class="care-flag" id="cg-flag" hidden></span>
       <span class="care-flag" id="cg-flag" hidden></span>
       <h1 class="care-word" id="cg-word">Connecting…</h1>
       <p class="care-sub" id="cg-sub"></p>
@@ -111,7 +108,6 @@
 
 <main class="resident" id="resident" hidden>
   <div class="resident-card glass-card" id="resident-card" data-tone="calm" role="status" aria-live="assertive">
-    <div class="resident-gator" id="res-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 0deg 130deg" camera-orbit="0deg 55deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div><pulse-wifi class="gator-wifi" data-conn state="off" bands="4" spread="70" pixel="1.5"></pulse-wifi></div>
     <div class="resident-gator" id="res-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 0deg 130deg" camera-orbit="0deg 55deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div><pulse-wifi class="gator-wifi" data-conn state="off" bands="4" spread="70" pixel="1.5"></pulse-wifi></div>
     <div class="resident-word" id="resident-word">All good</div>
     <div class="resident-sub" id="resident-sub">Pulse is on</div>
@@ -220,7 +216,6 @@
 import { SignalBuffer, Waveform, EnergyChart, readTheme, watchTheme, connect, timeAtX } from "./signal.js";
 import "./wifi.js";
 import { fetchTrends, renderTrends, renderTrendsMessage } from "./trends.js";
-import "./wifi.js";
 
 const $ = (id) => document.getElementById(id);
 const STALE_MS = 2000;
@@ -627,7 +622,6 @@ function onMessage(msg) {
 function onState(s) {
   conn = s;
   for (const w of document.querySelectorAll("pulse-wifi[data-conn]")) w.setAttribute("state", s === "open" ? "live" : "off");
-  for (const w of document.querySelectorAll("pulse-wifi[data-conn]")) w.setAttribute("state", s === "open" ? "live" : "off");
   if (s !== "open") return;
   ever = true;
   st = fresh();
@@ -1022,7 +1016,6 @@ function careFor(nowMs) {
   const tl = timeLeft(nowMs);
   if (s === "FALL_CANDIDATE") {
     return { tone: "calm", mood: "happy", pill: "Watching", word: "All is well", sub: "Double-checking a sudden movement. Nothing needed from you yet.", flag: `Potential fall detected · checking${tl ? ` ${tl.secs} s` : "…"}` };
-    return { tone: "calm", mood: "happy", pill: "Watching", word: "All is well", sub: "Double-checking a sudden movement. Nothing needed from you yet.", flag: `Potential fall detected · checking${tl ? ` ${tl.secs} s` : "…"}` };
   }
   if (s === "COUNTDOWN") {
     return {
@@ -1172,9 +1165,6 @@ function renderCare(nowMs) {
     setText($("cg-word"), c.word);
     fitLine($("cg-word"));
   }
-  show($("cg-flag"), !!c.flag);
-  if (c.flag) setText($("cg-flag"), c.flag);
-  setText($("cg-word"), c.word);
   setText($("cg-sub"), c.sub);
   show($("cg-timer"), !!c.timer);
   if (c.timer) {
