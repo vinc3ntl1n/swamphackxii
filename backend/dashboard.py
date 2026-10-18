@@ -241,6 +241,8 @@ class Dashboard:
     def _command(self, msg: dict) -> None:
         cmd, now, flow = msg.get("cmd"), self.clock.now(), self.pipe.flow
         if cmd == "cancel":
+            if flow.state == COUNTDOWN:
+                self.sim = None
             flow.cancel(now, "the dashboard (I'm OK)")
         elif cmd == "reset":
             self.sim = None
