@@ -1288,7 +1288,7 @@ body.friendly-page {
   background-attachment: fixed;
 }
 
-.glass {
+.glass-card {
   --glass-tint: rgba(255, 255, 255, 0.14);
   position: relative;
   isolation: isolate;
@@ -1306,7 +1306,7 @@ body.friendly-page {
     0 4px 14px rgba(24, 64, 40, 0.06);
 }
 
-.glass::before {
+.glass-card::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -1316,7 +1316,7 @@ body.friendly-page {
   pointer-events: none;
 }
 
-.glass::after {
+.glass-card::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -1330,38 +1330,38 @@ body.friendly-page {
   pointer-events: none;
 }
 
-.care-card.glass {
+.care-card.glass-card {
   --glass-tint: rgba(255, 255, 255, 0.12);
   border-color: rgba(255, 255, 255, 0.55);
 }
 
-.care-card.glass[data-tone="watch"] {
+.care-card.glass-card[data-tone="watch"] {
   --glass-tint: rgba(255, 228, 160, 0.42);
 }
 
-.care-card.glass[data-tone="urgent"] {
+.care-card.glass-card[data-tone="urgent"] {
   --glass-tint: rgba(255, 196, 188, 0.5);
 }
 
-.care-card.glass[data-tone="alert"] {
+.care-card.glass-card[data-tone="alert"] {
   --glass-tint: rgba(214, 58, 48, 0.86);
   border-color: rgba(255, 255, 255, 0.35);
 }
 
-.care-card.glass[data-tone="offline"] {
+.care-card.glass-card[data-tone="offline"] {
   --glass-tint: rgba(232, 236, 233, 0.5);
 }
 
-.soft-card.glass,
-.resident-card.glass {
+.soft-card.glass-card,
+.resident-card.glass-card {
   --glass-tint: rgba(255, 255, 255, 0.16);
 }
 
-.resident-card.glass[data-tone="ask"] {
+.resident-card.glass-card[data-tone="ask"] {
   --glass-tint: rgba(255, 196, 188, 0.5);
 }
 
-.resident-card.glass[data-tone="told"] {
+.resident-card.glass-card[data-tone="told"] {
   --glass-tint: rgba(255, 228, 160, 0.45);
 }
 
@@ -1558,4 +1558,56 @@ body.friendly-page .toggle.views button[aria-pressed="true"] {
   .views-thumb {
     transition: none;
   }
+}
+
+/* liquid-glass-react islands (web/glass.js). The library expects a few Tailwind classes. */
+
+.lg-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.lg-layer .bg-black { background: #000000; }
+.lg-layer .opacity-0 { opacity: 0; }
+.lg-layer .opacity-20 { opacity: 0.2; }
+.lg-layer .opacity-100 { opacity: 1; }
+.lg-layer .transition-all { transition-property: all; }
+.lg-layer .duration-150 { transition-duration: 150ms; }
+.lg-layer .ease-in-out { transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+.lg-layer .pointer-events-none { pointer-events: none; }
+.lg-layer .mix-blend-overlay { mix-blend-mode: overlay; }
+.lg-layer .text-white { color: #ffffff; }
+.lg-layer .relative { position: relative; }
+.lg-layer .cursor-pointer { cursor: pointer; }
+
+.lg-on {
+  background: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  border-color: transparent !important;
+}
+
+.lg-on.glass-card {
+  box-shadow: 0 24px 60px rgba(24, 64, 40, 0.1), 0 4px 14px rgba(24, 64, 40, 0.05);
+}
+
+.lg-on::before,
+.lg-on::after {
+  display: none;
+}
+
+.lg-on > :not(.lg-layer):not(.views-thumb) {
+  position: relative;
+  z-index: 1;
+}
+
+body.friendly-page .toggle.views.lg-on {
+  box-shadow: 0 6px 18px rgba(24, 64, 40, 0.08);
+}
+
+.lg-layer .glass {
+  box-shadow: 0 18px 50px rgba(24, 64, 40, 0.12), 0 3px 10px rgba(24, 64, 40, 0.06) !important;
 }

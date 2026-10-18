@@ -4,6 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fall Watch</title>
+<script type="importmap">
+{
+  "imports": {
+    "react": "/vendor/react.mjs",
+    "react/jsx-runtime": "/vendor/react-jsx-runtime.mjs",
+    "react-dom/client": "/vendor/react-dom-client.mjs",
+    "liquid-glass-react": "/vendor/liquid-glass-react.mjs"
+  }
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;800;900&display=swap">
 <link rel="stylesheet" href="style.css">
@@ -55,8 +65,8 @@
 </header>
 
 <main class="care" id="caregiver">
-  <section class="care-card glass" id="cg-card" data-tone="calm" role="status" aria-live="polite">
-    <div class="care-gator" id="cg-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 45deg 130deg" camera-orbit="0deg 72deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
+  <section class="care-card glass-card" id="cg-card" data-tone="calm" role="status" aria-live="polite">
+    <div class="care-gator" id="cg-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 22.5deg 130deg" camera-orbit="0deg 72deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
     <div class="care-body">
       <span class="care-pill" id="cg-pill">Watching</span>
       <h1 class="care-word" id="cg-word">Connecting…</h1>
@@ -77,11 +87,11 @@
     </div>
   </section>
   <section class="care-side">
-    <figure class="soft-card glass movement">
+    <figure class="soft-card glass-card movement">
       <header><h2>Movement in the room</h2><span class="soft-note" id="cg-move-note">last 20 seconds</span></header>
       <div class="plot"><canvas id="cg-energy" role="img" aria-label="Average movement in the room over the last 20 seconds"></canvas></div>
     </figure>
-    <figure class="soft-card glass activity">
+    <figure class="soft-card glass-card activity">
       <header><h2>Recent activity</h2></header>
       <ol class="activity-list" id="cg-activity"></ol>
       <p class="activity-empty" id="cg-empty">Nothing has happened yet. That's a good thing.</p>
@@ -90,8 +100,8 @@
 </main>
 
 <main class="resident" id="resident" hidden>
-  <div class="resident-card glass" id="resident-card" data-tone="calm" role="status" aria-live="assertive">
-    <div class="resident-gator" id="res-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 45deg 130deg" camera-orbit="0deg 72deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
+  <div class="resident-card glass-card" id="resident-card" data-tone="calm" role="status" aria-live="assertive">
+    <div class="resident-gator" id="res-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 22.5deg 130deg" camera-orbit="0deg 72deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
     <div class="resident-word" id="resident-word">All good</div>
     <div class="resident-sub" id="resident-sub">Fall Watch is on</div>
     <div class="resident-buttons" id="resident-buttons" hidden>
@@ -1146,6 +1156,23 @@ setTab(tab);
 renderWhy();
 renderPicker();
 requestAnimationFrame(loop);
+
+const GLASS = [
+  ["#cg-card", { radius: 32, elasticity: 0, displacementScale: 70 }],
+  [".soft-card.movement", { radius: 24, elasticity: 0, displacementScale: 60 }],
+  [".soft-card.activity", { radius: 24, elasticity: 0, displacementScale: 60 }],
+  ["#resident-card", { radius: 36, elasticity: 0, displacementScale: 70 }],
+  [".toggle.views", { radius: 999, elasticity: 0.12, displacementScale: 50 }],
+];
+import("./glass.js")
+  .then(({ mountGlass }) => {
+    for (const [selector, options] of GLASS) {
+      const host = document.querySelector(selector);
+      if (host) mountGlass(host, { overLight: false, blurAmount: 0.3, saturation: 150, aberrationIntensity: 1.5, ...options });
+    }
+    requestAnimationFrame(placeThumb);
+  })
+  .catch((e) => console.warn("Liquid glass unavailable, keeping the CSS glass:", e));
 </script>
 </body>
 </html>
