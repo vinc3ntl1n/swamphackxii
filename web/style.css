@@ -104,6 +104,160 @@ body {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+.dashboard {
+  display: grid;
+  grid-template-rows: auto minmax(650px, 1fr);
+  min-height: 100vh;
+}
+
+.dashboard .record {
+  height: auto;
+}
+
+.session-controls {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--grid);
+}
+
+.session-controls[hidden], .session-actions [hidden] {
+  display: none;
+}
+
+.session-heading, .session-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.session-heading {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.session-heading h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.session-status, .setting, .session-details summary {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.session-controls fieldset {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.setting {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.test-choices, .split-choices {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.session-controls button, .session-controls input {
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid var(--axis);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+
+.session-controls button {
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.session-controls button:hover:not(:disabled) {
+  background: var(--grid);
+}
+
+.session-controls button[aria-pressed="true"], #session-start {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--surface);
+}
+
+.session-controls button:disabled, .session-controls fieldset:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.session-controls :focus-visible {
+  outline: 2px solid var(--series);
+  outline-offset: 3px;
+}
+
+.session-controls input[type="number"] {
+  width: 90px;
+}
+
+.session-details {
+  padding-top: 2px;
+}
+
+.session-details summary {
+  min-height: 54px;
+  display: list-item;
+  padding-top: 20px;
+  cursor: pointer;
+}
+
+.session-details > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.session-details input {
+  width: 180px;
+  max-width: 100%;
+}
+
+.session-actions {
+  margin-top: 12px;
+}
+
+#session-stop {
+  color: var(--critical);
+}
+
+#session-error {
+  flex: 1 1 300px;
+  margin: 0;
+  color: var(--critical);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .record {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
@@ -557,6 +711,23 @@ body {
 }
 
 @media (max-width: 900px) {
+  .dashboard {
+    display: block;
+  }
+
+  .test-setting {
+    flex-basis: 100%;
+  }
+
+  .test-choices {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .test-choices button {
+    padding-inline: 6px;
+  }
+
   .record {
     grid-template-columns: minmax(0, 1fr);
     height: auto;

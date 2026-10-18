@@ -3,10 +3,49 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Record view</title>
+<title>Training dashboard</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<form class="session-controls" id="session-controls" aria-label="Recording session" hidden>
+  <div class="session-heading">
+    <h1>Training dashboard</h1>
+    <span class="session-status" id="session-status" role="status"></span>
+  </div>
+  <fieldset id="session-settings">
+    <legend class="sr-only">Recording settings</legend>
+    <div class="setting test-setting">
+      <span class="setting-label" id="test-label">Test</span>
+      <div class="test-choices" role="group" aria-labelledby="test-label">
+        <button type="button" data-test="fall" aria-pressed="true">Fall</button>
+        <button type="button" data-test="sit-down" aria-pressed="false">Sit Down</button>
+        <button type="button" data-test="walk" aria-pressed="false">Walk</button>
+        <button type="button" data-test="empty" aria-pressed="false">Empty Room</button>
+      </div>
+    </div>
+    <label class="setting">Clips<input id="session-n" type="number" min="1" max="1000" step="1" value="10" required></label>
+    <div class="setting">
+      <span class="setting-label" id="split-label">Save to</span>
+      <div class="split-choices" role="group" aria-labelledby="split-label">
+        <button type="button" data-split="train" aria-pressed="true">Training</button>
+        <button type="button" data-split="test" aria-pressed="false">Test</button>
+      </div>
+    </div>
+    <label class="setting">Position time (s)<input id="session-gap" type="number" min="3" max="300" step="0.5" value="8" required></label>
+    <details class="session-details">
+      <summary>Session details</summary>
+      <div>
+        <label class="setting">Performer<input id="session-performer" type="text" value="vincent" maxlength="100" required></label>
+        <label class="setting">Room<input id="session-spot" type="text" value="test-room" maxlength="100" required></label>
+      </div>
+    </details>
+  </fieldset>
+  <div class="session-actions">
+    <button type="submit" id="session-start" disabled>Start recording</button>
+    <button type="button" id="session-stop" disabled>Stop</button>
+    <p id="session-error" role="alert" hidden></p>
+  </div>
+</form>
 <main class="record">
   <section class="cue" aria-label="Timing cues">
     <div class="phase" id="phase" data-tone="idle">
@@ -119,6 +158,11 @@ let hover = null;
 let sparks = [];
 let shownWord = null;
 let asking = false;
+let session = null;
+let selectedTest = "fall";
+let selectedSplit = "train";
+let requesting = false;
+let requestError = "";
 
 function fresh() {
   return {
@@ -185,6 +229,30 @@ function onMessage(msg) {
   } else if (msg.type === "source") state.source = msg.mode;
   else if (msg.type === "config") state.cfg = msg;
   else if (msg.type === "record") onRecord(msg);
+  else if (msg.type === "session") {
+    if (session?.id !== msg.id) {
+      resetRecording();
+      selectedTest = msg.label;
+      selectedSplit = msg.split;
+      for (const key of ["n", "gap", "performer", "spot"]) $("session-" + key).value = msg[key];
+      requestError = "";
+      renderSelections();
+    }
+    session = msg;
+    $("session-controls").hidden = false;
+    document.body.classList.add("dashboard");
+  }
+}
+
+function resetRecording() {
+  state = { ...fresh(), cfg: state.cfg, source: state.source };
+  buffer.reset(0);
+  heat.repaint();
+  lastArrival = null;
+  openedAt = performance.now();
+  sparks = [];
+  $("saved").replaceChildren();
+  $("result").replaceChildren();
 }
 
 function onState(s) {
@@ -192,6 +260,7 @@ function onState(s) {
   if (s !== "open") return;
   ever = true;
   state = fresh();
+  session = null;
   buffer.reset(0);
   heat.repaint();
   sparks = [];
@@ -226,8 +295,13 @@ function cueFor(now) {
     if (!ever) return { tone: "idle", word: "CONNECTING", sub: "" };
     return { tone: "idle", word: "SESSION ENDED", sub: "check the terminal" };
   }
+  if (session?.status === "stopping") return { tone: "position", word: "STOPPING", sub: "", progress: 0 };
+  if (session?.error) return { tone: "problem", word: "SESSION ERROR", sub: "", progress: 0 };
   if (state.failed) return { tone: "problem", word: "VIEW STOPPED", sub: "recording continues: follow the terminal" };
-  if (!m) return { tone: "idle", word: "READY", sub: "waiting for the first clip" };
+  if (!m) return {
+    tone: "idle", word: session?.status === "running" ? "STARTING" : "READY",
+    sub: session?.status === "running" ? "waiting for receiver packets" : "",
+  };
   const cfg = state.cfg;
   const clip = state.clips.get(m.clip);
   if (m.phase === "calibrating") {
@@ -338,15 +412,63 @@ function renderRecal() {
   const m = state.last;
   const calibrating = m != null && m.phase === "calibrating";
   const live = conn === "open" && !state.failed && !state.done && m != null && m.n > 0;
-  $("recal-box").hidden = m != null && !m.n;
-  $("recal").disabled = !live || asking || state.queued || calibrating;
+  const idle = session?.status === "idle" && conn === "open";
+  $("recal-box").hidden = !session && m != null && !m.n;
+  $("recal").disabled = (!live && !idle) || asking || requesting || state.queued || calibrating || session?.status === "stopping";
   let note = "";
   if (live && state.queued) note = "Recalibrating before the next clip";
   else if (live && calibrating) note = "Calibrating: everyone out of the area, nobody moves";
   else if (live && state.refused) note = "The session can't recalibrate right now";
   else if (live) note = "if the boards moved or the room changed";
+  else if (idle && state.refused) note = "Calibration could not start. Try again.";
   setText($("recal-note"), note);
   $("recal-note").classList.toggle("on", live && (state.queued || calibrating || state.refused));
+}
+
+function renderSelections() {
+  for (const b of document.querySelectorAll("[data-test]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.test === selectedTest));
+  }
+  for (const b of document.querySelectorAll("[data-split]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.split === selectedSplit));
+  }
+}
+
+function renderControls() {
+  if (!session) return;
+  const active = session.status !== "idle";
+  const unavailable = conn !== "open" || requesting;
+  $("session-settings").disabled = active || unavailable;
+  $("session-start").disabled = active || unavailable;
+  $("session-stop").disabled = !active || unavailable || session.status === "stopping";
+  const status = conn !== "open" ? "Reconnecting" : session.status === "stopping" ? "Stopping"
+    : active ? session.calibration ? "Calibrating" : `${session.label === "empty" ? "EMPTY ROOM" : ACTION[session.label]} · ${session.n} ${session.n === 1 ? "clip" : "clips"} · ${session.split === "test" ? "Test" : "Training"}`
+    : "Ready";
+  setText($("session-status"), status);
+  const error = requestError || session.error || "";
+  $("session-error").hidden = !error;
+  setText($("session-error"), error);
+}
+
+async function sessionAction(path, body) {
+  requesting = true;
+  requestError = "";
+  renderControls();
+  try {
+    const response = await fetch(path, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      requestError = response.status === 409 ? "The session is busy or has already finished."
+        : response.status === 422 ? "Check the recording settings."
+        : "The request failed. Try again.";
+    }
+  } catch {
+    requestError = "Lost connection to the dashboard. Reconnecting.";
+  } finally {
+    requesting = false;
+    renderControls();
+  }
 }
 
 async function recalibrate() {
@@ -512,7 +634,7 @@ function renderChips(nowMs) {
     text = state.done ? "Session finished" : "⚠ Lost the recording session, retrying";
     alert = !state.done;
   } else if (state.failed) text = "⚠ Live view stopped; the recording continues in the terminal";
-  else if (conn === "open" && !state.done) {
+  else if (conn === "open" && !state.done && (!session || session.status === "running")) {
     const since = nowMs - (lastArrival ?? openedAt);
     if (since > STALE_MS) text = `⚠ No packets for ${Math.floor(since / 1000)} s: is the SEND board powered?`;
   }
@@ -584,6 +706,7 @@ function loop() {
   shape.draw(theme);
   renderCue(now);
   renderRecal();
+  renderControls();
   drawTimeline(now);
   renderChips(nowMs);
   renderTip(now, hit);
@@ -616,6 +739,21 @@ for (const b of document.querySelectorAll(".toggle button")) {
   b.addEventListener("click", () => setMode(b.dataset.mode));
 }
 $("recal").addEventListener("click", recalibrate);
+for (const b of document.querySelectorAll("[data-test]")) {
+  b.addEventListener("click", () => { selectedTest = b.dataset.test; renderSelections(); });
+}
+for (const b of document.querySelectorAll("[data-split]")) {
+  b.addEventListener("click", () => { selectedSplit = b.dataset.split; renderSelections(); });
+}
+$("session-controls").addEventListener("submit", (event) => {
+  event.preventDefault();
+  sessionAction("/session/start", {
+    label: selectedTest, split: selectedSplit, n: Number($("session-n").value),
+    gap: Number($("session-gap").value), performer: $("session-performer").value.trim(),
+    spot: $("session-spot").value.trim(),
+  });
+});
+$("session-stop").addEventListener("click", () => sessionAction("/session/stop", {}));
 for (const [id, canvas] of Object.entries(plots)) {
   canvas.addEventListener("pointermove", (e) => (hover = { id, clientX: e.clientX, clientY: e.clientY }));
   canvas.addEventListener("pointerleave", () => (hover = null));
