@@ -141,6 +141,39 @@ class PipelineHealthTests(unittest.TestCase):
         self.assertIn("receiver_stale", sink.reasons())
         self.assertFalse(detector.inputs)
 
+    def test_empty_signal_does_not_create_motion_or_keep_receiver_fresh(self):
+        pipe, sink, detector = self.make_pipeline("A")
+        with patch("backend.detection.motion.raw_energy", return_value=1):
+            self.feed(pipe, 0, 1)
+        last_valid = pipe.trackers["A"].last_valid_t
+        for t in np.arange(1.1, 3.2, 0.1):
+            info, result = pipe.process(Frame(round(float(t), 6), -40, np.zeros(2), "A"))
+            self.assertEqual(info.reason, "empty_signal")
+            self.assertIsNone(info.energy)
+            self.assertIsNone(result)
+        self.assertEqual(pipe.trackers["A"].last_valid_t, last_valid)
+        self.assertEqual(pipe.trackers["A"].level, STALE)
+        self.assertFalse(detector.inputs)
+        self.assertNotIn("motion_started", sink.reasons())
+        self.assertIn("empty_signal", sink.reasons())
+        self.assertIn("receiver_stale", sink.reasons())
+
+    def test_empty_signal_is_rejected_before_calibration_or_selected_channels(self):
+        tracker = MotionTracker("A")
+        info, _ = tracker.update(Frame(1, -40, np.zeros(3), "A"))
+        self.assertEqual(info.reason, "empty_signal")
+        self.assertIsNone(tracker.last_valid_t)
+        self.assertEqual(tracker.cal_frames, [])
+        tracker.load_calibration({"measure": CAL["measure"], "size": 3,
+                                  "mask": [1, 2], "baseline": 1.0})
+        info, _ = tracker.update(Frame(2, -40, np.array([10.0, 0, 0]), "A"))
+        self.assertEqual(info.reason, "empty_signal")
+        self.assertIsNone(tracker.last_valid_t)
+        # Null bins are normal; retain a frame with any real usable amplitude.
+        info, _ = tracker.update(Frame(3, -40, np.array([0.0, 0, 10.0]), "A"))
+        self.assertNotEqual(info.reason, "empty_signal")
+        self.assertEqual(tracker.last_valid_t, 3)
+
     def test_stale_moving_receiver_no_longer_blocks_healthy_fall(self):
         pipe, sink, detector = self.make_pipeline("A", "B")
         with patch("backend.detection.motion.raw_energy", side_effect=motion_energy):

@@ -146,6 +146,10 @@ button.chip:disabled {
   background: var(--critical);
 }
 
+.sensor-chip[data-health="warming"] .dot {
+  background: var(--candidate);
+}
+
 .sensor-progress {
   height: 3px;
   overflow: hidden;

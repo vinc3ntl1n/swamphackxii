@@ -187,6 +187,39 @@ The JSONL records explain each stage:
   `resumed_movement`, packet gaps, missing post-event observations, stale links,
   or `classified` with the six RF inputs, probabilities and inference time.
 
+The capture reader drains serial bytes in chunks and reassembles complete CSV
+lines, avoiding a Python read for each byte. Partial lines have a size limit;
+reconnects never join bytes from two connections. `capture_health.links` reports
+bytes waiting in the serial driver, bytes/lines received, valid and malformed
+CSI rows, read timeouts, and connection counts per receiver. These distinguish
+quiet signal from missing or corrupt acquisition.
+
+For the ESP32-S3 25-column format, capture also preserves the sender packet ID
+and receiver microsecond timestamp. `links.<link>.source` compares each
+receiver's clock progression with monotonic laptop receipt time, handles
+32-bit wrap and restart, and reports `source_lag_ms`, `source_step_ms`,
+`host_step_ms`, `skipped_ids` and `clock_event`. Source IDs can skip before USB;
+their gaps are diagnostic and do not automatically cancel events. A known clock
+restart or serial reconnect requires fresh calibration on that receiver.
+
+`source_lag_ms` measures increased delay relative to the best arrival offset
+seen during this connection. It is **not absolute latency**: receiver/laptop
+clocks are unsynchronized, initial buffered data may already be old, and clock
+drift can contribute. `source_age_known` remains false. Source time delivered
+more than 0.5 seconds faster than host time is separately flagged as
+`source_compressed`; affected queued evidence is discarded. Excessive relative
+source delay plus Python queue/lock age is discarded as `source_backlog` or
+`stale_capture`. Raw valid CSI rows remain saved even when detection skips them.
+Legacy CSVs without device timing retain host-based freshness checks.
+
+Runtime `capture_age_ms` uses monotonic receipt age for live frames, so a laptop
+wall-clock change cannot make an old packet appear fresh. The separate
+`relative_source_age_ms` includes the estimated source delay. Neither changes
+the host timestamps or amplitude values used by the existing RF features.
+The dashboard shows `warming` until fresh motion-energy windows exist and
+`invalid` for corrupt or all-zero usable CSI. Zero CSI is never treated as a
+quiet-room observation.
+
 For a missed fall, first check whether motion started, then whether a candidate
 was created, then whether `classified` occurred. A missing classification with
 a rejection reason is a pipeline issue; a non-fall RF verdict has its model

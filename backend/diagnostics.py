@@ -129,6 +129,7 @@ class RuntimeMonitor:
         self._last_sample: float | None = None
         self._last_event_t: float | None = None
         self._last_frame_t: float | None = None
+        self._last_frame = None
         self._processing_ms: float | None = None
         self._max_processing_ms: float | None = None
         self._frames = 0
@@ -137,6 +138,7 @@ class RuntimeMonitor:
     def observe(self, pipe, frame, processing_ms: float) -> None:
         with self._lock:
             self._last_frame_t = self._last_event_t = frame.t
+            self._last_frame = frame
             self._processing_ms = processing_ms
             self._max_processing_ms = max(self._max_processing_ms or 0.0, processing_ms)
             self._frames += 1
@@ -168,8 +170,15 @@ class RuntimeMonitor:
                 "slow_frames": self._slow_frames,
             }
             if self.live:
-                fields["capture_age_ms"] = (max(0.0, time.time() - self._last_frame_t) * 1000
-                                            if self._last_frame_t is not None else None)
+                frame = self._last_frame
+                fields["capture_age_ms"] = frame.capture_age_s() * 1000 if frame else None
+                fields["capture_age_basis"] = ("monotonic_receipt" if frame and frame.received_mono is not None
+                                               else "host_wall_time")
+                fields["relative_source_age_ms"] = (frame.relative_age_s() * 1000
+                                                      if frame and frame.source_lag_s is not None else None)
+                fields["source_age_known"] = False
+                fields["source_id"] = frame.source_id if frame else None
+                fields["source_timestamp_us"] = frame.source_timestamp_us if frame else None
             self.logfile.write("runtime", event_t, **fields)
         except Exception as error:
             self.logfile.write("diagnostic_error", event_t, error=str(error))

@@ -50,8 +50,8 @@ class TerminalRuntime:
     def process(self, frame: Frame):
         started = time.perf_counter()
         with self.lock:
-            age_s = max(0.0, time.time() - frame.t) if self.live_age else 0.0
-            if self.live_age and age_s > LIVE_MAX_AGE_S:
+            age_s = frame.capture_age_s() if self.live_age else 0.0
+            if self.live_age and frame.relative_age_s() > LIVE_MAX_AGE_S:
                 self.pipe.capture_gap(time.time(), [frame.link], reason="stale_capture")
                 self.sensors.refresh(time.time())
                 tracker = self.pipe.trackers.get(frame.link)
@@ -71,6 +71,8 @@ class TerminalRuntime:
     def capture_health(self, health: dict) -> None:
         """Apply known capture loss before the next frame can reach the RF."""
         with self.lock:
+            for link in health.get("reset_links", ()):
+                self.pipe.suspend_link(link, health["capture_wall_t"])
             if health.get("dropped_since_report", 0):
                 self.pipe.capture_gap(health["last_drop"]["capture_t"], health.get("dropped_links"))
             if health.get("idle"):

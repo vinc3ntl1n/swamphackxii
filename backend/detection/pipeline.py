@@ -132,7 +132,7 @@ class Pipeline:
         was_calibrating = tracker.level == CALIBRATING
         info, event = tracker.update(frame)
         valid = tracker.last_valid_t == frame.t and info.reason not in (
-            "invalid_amplitude", "wrong_frame_size")
+            "invalid_amplitude", "wrong_frame_size", "empty_signal")
         if valid:
             self.suspended.discard(frame.link)
         if valid and last_valid_t is not None and frame.t - last_valid_t > PACKET_GAP_S:

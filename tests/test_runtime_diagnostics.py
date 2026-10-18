@@ -9,6 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import numpy as np
+
+from backend.capture.csi import Frame
 from backend.diagnostics import CaptureLogHandler, DiagnosticSink, EventLog, RuntimeMonitor
 
 
@@ -86,7 +89,7 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
     def test_runtime_samples_live_age_cost_health_and_idle_once_per_second(self):
         monitor = RuntimeMonitor(self.log, live=True)
         pipe = self.pipe()
-        frame = SimpleNamespace(t=98.0)
+        frame = Frame(98.0, -40, np.ones(2))
         with patch("backend.diagnostics.time.monotonic", return_value=10.0), \
                 patch("backend.diagnostics.time.time", return_value=100.0):
             monitor.observe(pipe, frame, 2.0)
@@ -109,6 +112,21 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
         self.assertEqual(rows[1]["receiver_health"]["A"]["status"], "ok")
         self.assertEqual(rows[2]["frames"], 0)
         self.assertIsNone(rows[2]["max_processing_ms"])
+
+    def test_live_age_uses_monotonic_receipt_and_separates_relative_source_delay(self):
+        monitor = RuntimeMonitor(self.log, live=True)
+        frame = Frame(98.0, -40, np.ones(2), received_mono=10.0,
+                      source_id=100, source_timestamp_us=123456, source_lag_s=.2)
+        with patch("backend.diagnostics.time.monotonic", return_value=10.3), \
+                patch("backend.diagnostics.time.time", return_value=999999.):
+            monitor.observe(self.pipe(), frame, 3.0)
+        row = self.rows()[0]
+        self.assertAlmostEqual(row["capture_age_ms"], 300.)
+        self.assertAlmostEqual(row["relative_source_age_ms"], 500.)
+        self.assertEqual(row["capture_age_basis"], "monotonic_receipt")
+        self.assertEqual(row["source_id"], 100)
+        self.assertEqual(row["source_timestamp_us"], 123456)
+        self.assertFalse(row["source_age_known"])
 
     def test_replay_never_treats_historical_time_as_capture_latency(self):
         monitor = RuntimeMonitor(self.log, live=False)

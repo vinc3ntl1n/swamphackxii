@@ -171,7 +171,7 @@ class LiveCaptureTests(unittest.TestCase):
 
         class Serial:
             def __init__(self, *args, **kwargs):
-                pass
+                self.pending = b"".join(list(serial_rows.queue))
 
             def __enter__(self):
                 return self
@@ -179,13 +179,17 @@ class LiveCaptureTests(unittest.TestCase):
             def __exit__(self, *args):
                 closed.append(True)
 
-            def readline(self):
-                try:
-                    return serial_rows.get_nowait()
-                except queue.Empty:
-                    drained.set()
-                    stop.wait(0.01)
-                    return b""
+            @property
+            def in_waiting(self):
+                return len(self.pending)
+
+            def read(self, size):
+                if self.pending:
+                    result, self.pending = self.pending[:size], self.pending[size:]
+                    return result
+                drained.set()
+                stop.wait(0.01)
+                return b""
 
         original_get = live._PacketBuffer.get
 

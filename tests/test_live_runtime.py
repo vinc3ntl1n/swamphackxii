@@ -113,6 +113,30 @@ class TerminalRuntimeTests(unittest.TestCase):
         self.wall += 0.1
         self.assertAlmostEqual(self.wall - entry["valid_at"], 0.4)
 
+    def test_receiver_restart_resets_calibration_before_stale_timeout(self):
+        self.candidate()
+        self.runtime.capture_health({"reset_links": ["A"], "capture_wall_t": 10.1,
+                                     "dropped_since_report": 0, "idle": False})
+        self.assertIsNone(self.pipe.pending)
+        self.assertEqual(self.pipe.flow.state, IDLE)
+        self.assertIsNone(self.pipe.trackers["A"].baseline)
+        self.assertIsNotNone(self.pipe.trackers["B"].baseline)
+        self.detector.classify.assert_not_called()
+
+    def test_receipt_age_and_source_lag_combine_without_changing_rf_clock(self):
+        runtime = TerminalRuntime(self.pipe, links=("A",), live_age=True)
+        self.addCleanup(runtime.stop)
+        self.candidate()
+        # A frame was read recently but had already accumulated transport delay.
+        frame = Frame(10.1, -45, np.ones(2), "A", received_mono=99.7, source_lag_s=.3)
+        with patch("backend.live_runtime.time.time", return_value=10.1):
+            info, result = runtime.process(frame)
+        self.assertEqual(info.reason, "stale_capture")
+        self.assertIsNone(result)
+        self.assertIsNone(self.pipe.pending)
+        self.detector.classify.assert_not_called()
+        self.assertEqual(frame.t, 10.1)
+
 
 if __name__ == "__main__":
     unittest.main()

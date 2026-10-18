@@ -217,8 +217,8 @@ const FEATURES = [
   ["duration_s", "Duration", " s"], ["mean_energy", "Mean energy", "×"],
   ["time_to_peak_s", "Time to peak", " s"], ["stop_s", "Peak to stop", " s"],
 ];
-const HEALTH = { waiting: "waiting for packets", calibrating: "calibrating", ready: "ready", stale: "signal lost", invalid: "invalid frames", ended: "replay ended" };
-const MAP_HEALTH = { waiting: "waiting", calibrating: "calibrating", ready: "ready", stale: "offline", invalid: "invalid", ended: "ended" };
+const HEALTH = { waiting: "waiting for packets", calibrating: "calibrating", warming: "warming signal", ready: "ready", stale: "signal lost", invalid: "invalid frames", ended: "replay ended" };
+const MAP_HEALTH = { waiting: "waiting", calibrating: "calibrating", warming: "warming", ready: "ready", stale: "offline", invalid: "invalid", ended: "ended" };
 const LOG_TEXT = { "Fall Candidate: stay still, deciding...": "Fall suspected: checking for movement…" };
 const NOTICE = {
   check_in: "Check-in to the Resident", alert: "Alert to the Caregiver",
@@ -518,13 +518,13 @@ function linkFor(name) {
 function sensorHealth(l, nowMs) {
   if (l.sensor) {
     const age = l.sensor.age_s == null ? Infinity : l.sensor.age_s + (nowMs - l.sensorAt) / 1000;
-    if (["ready", "calibrating"].includes(l.sensor.health) && age * 1000 >= STALE_MS && !st.ended) return "stale";
+    if (["ready", "calibrating", "warming"].includes(l.sensor.health) && age * 1000 >= STALE_MS && !st.ended) return "stale";
     return l.sensor.health;
   }
   return "waiting";
 }
 
-const isFresh = (l, nowMs) => ["ready", "calibrating"].includes(sensorHealth(l, nowMs));
+const isFresh = (l, nowMs) => ["ready", "calibrating", "warming"].includes(sensorHealth(l, nowMs));
 const isReady = (l, nowMs) => sensorHealth(l, nowMs) === "ready";
 const score = (v) => Number.isFinite(v) ? `${(v * 100).toFixed(1)}%` : "—";
 const number = (v, digits = 2) => Number.isFinite(v) ? v.toFixed(digits) : "—";
@@ -935,6 +935,9 @@ function statusFor(nowMs) {
   if (live.some((l) => sensorHealth(l, nowMs) === "calibrating")) {
     return { tone: "calibrating", word: "CALIBRATING", sub: `keep the area still for ${st.cfg?.calibrate_s ?? 10} s` };
   }
+  if (live.some((l) => sensorHealth(l, nowMs) === "warming")) {
+    return { tone: "calibrating", word: "SIGNAL WARMING", sub: "waiting for fresh motion measurements" };
+  }
   if (st.state && st.state.sim) return { tone: "idle", word: "ALL QUIET", sub: "Simulated Fall playing…" };
   if (!live.length) {
     return { tone: "idle", word: st.ended ? "STREAM ENDED" : "SENSORS OFFLINE", sub: st.ended ? "replay finished · Simulate fall still works" : "waiting for usable sensor packets" };
@@ -1010,6 +1013,9 @@ function careFor(nowMs) {
   const live = liveLinks(nowMs);
   if (live.some((l) => sensorHealth(l, nowMs) === "calibrating")) {
     return { tone: "calm", mood: "happy", pill: "Getting ready", word: "Getting ready", sub: "Learning what the empty room looks like. Keep the area still…" };
+  }
+  if (live.some((l) => sensorHealth(l, nowMs) === "warming")) {
+    return { tone: "watch", mood: "worried", pill: "Signal warming", word: "Waiting for fresh signal", sub: "The sensors are receiving packets. Motion readings are not ready yet." };
   }
   if (!live.length && !(st.state && st.state.sim)) {
     return st.ended
@@ -1164,7 +1170,7 @@ function renderMotion(nowMs) {
     pill.dataset.level = health === "ready" ? level : health;
     pill.dataset.health = health;
     setText(pill.querySelector(".sensor-name"), `${l.name} · ${HEALTH[health] ?? health}`);
-    const energy = fresh && health !== "calibrating" ? sensor?.energy ?? f?.energy : null;
+    const energy = health === "ready" ? sensor?.energy ?? f?.energy : null;
     setText(pill.querySelector(".sensor-energy"), Number.isFinite(energy) ? `${number(energy, 1)}×` : "");
     const cal = sensor?.calibration;
     let text = "No calibrated signal yet";
@@ -1174,7 +1180,8 @@ function renderMotion(nowMs) {
     } else if (cal?.ready) {
       text = `${cal.usable_channels ?? "—"} / ${cal.total_channels ?? "—"} channels · baseline ${number(cal.baseline, 4)}`;
     }
-    if (["stale", "invalid"].includes(health)) text = health === "invalid" ? "Frames do not match the calibrated signal" : "Check receiver and sender connections";
+    if (health === "warming") text = "Collecting fresh motion windows · detection not ready";
+    if (["stale", "invalid"].includes(health)) text = health === "invalid" ? "Missing or unusable CSI values" : "Check receiver and sender connections";
     if (sensor?.invalid_packets) text += ` · ${sensor.invalid_packets} invalid`;
     setText(pill.querySelector(".sensor-detail"), text);
     const progress = pill.querySelector(".sensor-progress");
@@ -1187,7 +1194,7 @@ function canRecalibrate(nowMs) {
   return conn === "open" && st.source === "LIVE" && !!st.state && flowState() === "IDLE"
     && !st.state.sim && !st.simTag && !st.ended
     && !st.recalibration.requesting && !st.recalibration.queued
-    && [...links.values()].some((l) => isReady(l, nowMs))
+    && [...links.values()].some((l) => isFresh(l, nowMs) && l.sensor?.calibration?.ready)
     && ![...links.values()].some((l) => l.sensor?.health === "calibrating");
 }
 
@@ -1316,6 +1323,9 @@ function renderResident(nowMs) {
   } else if (s === "IDLE" && liveLinks(nowMs).some((l) => sensorHealth(l, nowMs) === "calibrating")) {
     word = "Getting ready";
     sub = "Please keep the area still while the sensors calibrate";
+  } else if (s === "IDLE" && liveLinks(nowMs).some((l) => sensorHealth(l, nowMs) === "warming")) {
+    word = "Signal warming";
+    sub = "Waiting for fresh motion readings from the room";
   } else if (conn === "open" && s === "COUNTDOWN") {
     tone = "ask";
     mood = "worried";

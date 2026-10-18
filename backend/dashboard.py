@@ -390,7 +390,7 @@ class SensorStatus:
         wall = time.monotonic()
         entry["packets_received"] += 1
         entry.update(raw_at=wall, rssi=frame.rssi, energy=info.energy, level=info.level)
-        if (info.reason in ("wrong_frame_size", "invalid_amplitude", "stale_capture")
+        if (info.reason in ("wrong_frame_size", "invalid_amplitude", "empty_signal", "stale_capture")
                 or not frame.amp.size or not np.isfinite(frame.amp).all()
                 or (tracker.size is not None and frame.amp.size != tracker.size)):
             entry["invalid_packets"] += 1
@@ -404,6 +404,7 @@ class SensorStatus:
 
     def refresh(self, now: float, force: bool = False) -> None:
         wall = time.monotonic()
+        pipeline_health = self.pipe.health(now)
         for link in sorted(self.links):
             entry = self.seen.get(link, {})
             valid_at = entry.get("valid_at")
@@ -418,8 +419,11 @@ class SensorStatus:
                 if self.source == "LIVE" and link not in self.suspended:
                     self.pipe.suspend_link(link, now)
                     self.suspended.add(link)
+            elif valid_at is None and entry.get("invalid_packets"):
+                health = "invalid" if raw_age <= SENSOR_STALE_S else "stale"
             elif tracker is not None and valid_at is not None:
-                health = "calibrating" if tracker.level == CALIBRATING else "ready"
+                state = pipeline_health[link]["status"]
+                health = "ready" if state == "ok" else state
             last_health, sent_at = self.sent.get(link, (None, -1e9))
             if not force and health == last_health and wall - sent_at < STATE_EVERY_S:
                 continue
@@ -435,7 +439,7 @@ class SensorStatus:
                 total_channels = int(tracker.cal_frames[-1].amp.size)
             times = entry.get("times", ())
             span = times[-1] - times[0] if len(times) > 1 else 0.0
-            hz = (len(times) - 1) / span if span > 0 and health in ("ready", "calibrating") else 0.0
+            hz = (len(times) - 1) / span if span > 0 and health in ("ready", "calibrating", "warming") else 0.0
             self.hub.publish({
                 "type": "sensor", "link": link, "source": self.source, "t": now,
                 "health": health, "age_s": None if age is None else round(age, 2),
@@ -519,6 +523,8 @@ class Dashboard:
 
     def capture_health(self, health: dict) -> None:
         with self.lock:
+            for link in health.get("reset_links", ()):
+                self.pipe.suspend_link(link, health["capture_wall_t"])
             if health.get("dropped_since_report", 0):
                 self.pipe.capture_gap(health["last_drop"]["capture_t"], health.get("dropped_links"))
             if health.get("idle"):
@@ -531,8 +537,8 @@ class Dashboard:
     def process(self, frame: Frame) -> tuple[FrameInfo, Result | None]:
         started = time.perf_counter()
         with self.lock:
-            age_s = max(0.0, time.time() - frame.t) if self.live else 0.0
-            if age_s > LIVE_MAX_AGE_S:
+            age_s = frame.capture_age_s() if self.live else 0.0
+            if self.live and frame.relative_age_s() > LIVE_MAX_AGE_S:
                 self.pipe.capture_gap(frame.t, (frame.link,), reason="stale_capture")
                 tracker = self.pipe.trackers.get(frame.link)
                 if self.monitor:

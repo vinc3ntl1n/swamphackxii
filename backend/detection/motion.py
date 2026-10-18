@@ -141,6 +141,12 @@ class MotionTracker:
             return FrameInfo(frame.t, self.level, None, None, "invalid_amplitude"), None
         if self.size is not None and frame.amp.size != self.size:
             return FrameInfo(frame.t, self.level, None, None, "wrong_frame_size"), None
+        usable = frame.amp if self.mask is None else frame.amp[self.mask]
+        if not np.any(usable):
+            # Missing CSI is not evidence of a quiet room. In particular, an
+            # all-zero vector after a valid reflection would create a large
+            # mean-shift spike followed by fabricated post-event stillness.
+            return FrameInfo(frame.t, self.level, None, None, "empty_signal"), None
 
         gap = self.last_valid_t is not None and frame.t - self.last_valid_t > PACKET_GAP_S
         if gap or self.level == STALE:

@@ -52,7 +52,8 @@ class LiveDashboardTests(unittest.TestCase):
         self.view.process(self.frame())
         self.view.sensors.refresh(10., force=True)
         status = self.sensor()
-        self.assertEqual(status['health'], 'ready')
+        self.assertEqual(status['health'], 'warming')
+        self.assertIsNone(status['energy'])
         self.assertEqual(status['rssi'], -48)
         self.assertEqual(status['calibration']['usable_channels'], 4)
         self.assertEqual(status['packets_received'], 1)
@@ -68,6 +69,46 @@ class LiveDashboardTests(unittest.TestCase):
         self.assertEqual(len(sensors), 2)
         self.assertEqual({msg['link']: msg['health'] for msg in sensors},
                          {'A': 'stale', 'B': 'waiting'})
+
+    def test_warming_packets_are_fresh_but_not_ready_until_energy_exists(self):
+        self.view.process(self.frame())
+        self.view.sensors.refresh(10., force=True)
+        self.assertEqual(self.sensor()['health'], 'warming')
+        self.assertIsNone(self.sensor()['energy'])
+        for elapsed in np.arange(.05, 1.01, .05):
+            self.wall = 100. + elapsed
+            self.view.process(self.frame(10. + elapsed))
+        self.view.sensors.refresh(11., force=True)
+        status = self.sensor()
+        self.assertEqual(status['health'], 'ready')
+        self.assertEqual(status['energy'], 0.)
+        self.assertGreater(status['hz'], 0.)
+
+    def test_invalid_receiver_from_startup_is_visible_without_a_prior_valid_frame(self):
+        info, _ = self.view.process(self.frame(width=6))
+        self.assertEqual(info.reason, 'wrong_frame_size')
+        self.view.sensors.refresh(10., force=True)
+        status = self.sensor()
+        self.assertEqual(status['health'], 'invalid')
+        self.assertEqual(status['invalid_packets'], 1)
+        self.assertIsNone(status['last_frame_t'])
+        self.wall += 3.
+        self.view.sensors.refresh(13., force=True)
+        self.assertEqual(self.sensor()['health'], 'stale')
+
+    def test_empty_signal_does_not_extend_valid_sensor_freshness(self):
+        self.view.process(self.frame())
+        valid_at = self.view.sensors.seen['A']['valid_at']
+        self.wall += 1.
+        empty = self.frame(11.)
+        empty.amp[:] = 0
+        info, _ = self.view.process(empty)
+        self.assertEqual(info.reason, 'empty_signal')
+        self.assertEqual(self.view.sensors.seen['A']['valid_at'], valid_at)
+        self.wall += 1.1
+        self.view.sensors.refresh(12.1, force=True)
+        self.assertEqual(self.sensor()['health'], 'invalid')
+        self.assertEqual(self.sensor()['invalid_packets'], 1)
 
     def test_missing_packets_discard_candidate_and_return_requires_calibration(self):
         self.view.process(self.frame())
@@ -117,6 +158,38 @@ class LiveDashboardTests(unittest.TestCase):
         self.assertEqual(self.pipe.trackers['A'].last_valid_t, last_valid)
         self.assertEqual(self.view.sensors.seen['A']['valid_at'], valid_at)
         classify.assert_not_called()
+
+    def test_live_monotonic_receipt_age_survives_wall_clock_change(self):
+        self.view.live = True
+        frame = self.frame()
+        frame.received_mono = self.wall - .2
+        with patch('time.time', return_value=1000.):
+            info, _ = self.view.process(frame)
+        self.assertNotEqual(info.reason, 'stale_capture')
+        self.assertAlmostEqual(self.view.clock.now(), 10.2)
+        self.view.sensors.refresh(10.2, force=True)
+        self.assertEqual(self.sensor()['age_s'], .2)
+
+    def test_known_source_backlog_is_rejected_despite_fresh_host_receipt(self):
+        self.view.live = True
+        frame = self.frame()
+        frame.received_mono = self.wall
+        frame.source_lag_s = .8
+        info, _ = self.view.process(frame)
+        self.assertEqual(info.reason, 'stale_capture')
+        self.assertIsNone(self.pipe.trackers['A'].last_valid_t)
+
+    def test_hard_receiver_reset_requires_recalibration_even_without_timeout(self):
+        self.view.process(self.frame())
+        self.candidate()
+        self.view.capture_health({'reset_links': ['A'], 'capture_wall_t': 10.1,
+                                  'dropped_since_report': 0, 'idle': False})
+        self.assertIsNone(self.pipe.trackers['A'].baseline)
+        self.assertIsNone(self.pipe.pending)
+        self.wall += .1
+        info, _ = self.view.process(self.frame(10.1))
+        self.assertEqual(info.level, 'calibrating')
+        self.assertIsNone(info.energy)
 
     def test_nonfinite_frames_do_not_refresh_valid_signal(self):
         self.view.process(self.frame())
