@@ -23,8 +23,8 @@ from backend.detection.motion import FrameInfo
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 HOST = "127.0.0.1"
-STICKY = ("source", "config")
-KEPT = ("record",)
+STICKY = ("source", "config", "state", "alarm")
+KEPT = ("record", "event", "log", "alert")
 KEPT_MAX = 2000
 BACKLOG_S = 60.0
 QUEUE_SIZE = 256
@@ -93,8 +93,9 @@ class Hub:
 
 
 class SignalFeed:
-    def __init__(self, hub: Hub) -> None:
+    def __init__(self, hub: Hub, link: str | None = None) -> None:
         self.hub = hub
+        self.link = link
         self.slot: int | None = None
         self.sum: np.ndarray | None = None
         self.count = 0
@@ -132,11 +133,14 @@ class SignalFeed:
         span = self.times[-1] - self.times[0]
         hz = round((len(self.times) - 1) / span, 1) if span >= 0.5 else None
         self.count = 0
-        self.hub.publish({
+        msg = {
             "type": "frame", "t": self.t,
             "energy": None if self.energy is None else round(self.energy, 2),
             "level": self.level, "row": values, "rssi": self.rssi, "hz": hz,
-        })
+        }
+        if self.link is not None:
+            msg["link"] = self.link
+        self.hub.publish(msg)
 
 
 async def _send(client: WebSocket, queue: asyncio.Queue[str], snapshot: list[str]) -> None:
@@ -147,7 +151,19 @@ async def _send(client: WebSocket, queue: asyncio.Queue[str], snapshot: list[str
             await client.send_text(await queue.get())
 
 
-def make_app(hub: Hub) -> FastAPI:
+Commands = Callable[[dict], None]
+
+
+def _command(on_command: Commands | None, text: str | None) -> None:
+    if on_command is None or not text:
+        return
+    with contextlib.suppress(ValueError):
+        msg = json.loads(text)
+        if isinstance(msg, dict):
+            on_command(msg)
+
+
+def make_app(hub: Hub, on_command: Commands | None = None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware("http")
@@ -160,15 +176,9 @@ def make_app(hub: Hub) -> FastAPI:
     async def index() -> FileResponse:
         return FileResponse(WEB / "record.html")
 
-    @app.post("/calibrate")
-    async def calibrate(request: Request) -> Response:
-        port = request.scope["server"][1]
-        if request.headers.get("host") not in (f"127.0.0.1:{port}", f"localhost:{port}"):
-            return Response(status_code=403)
-        if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
-            return Response(status_code=415)
-        action = hub.actions.get("calibrate")
-        return Response(status_code=202 if action is not None and action() else 409)
+    @app.get("/dashboard")
+    async def dashboard() -> FileResponse:
+        return FileResponse(WEB / "dashboard.html")
 
     @app.websocket("/ws")
     async def ws(client: WebSocket) -> None:
@@ -176,8 +186,8 @@ def make_app(hub: Hub) -> FastAPI:
         queue, snapshot = hub.join()
         sender = asyncio.create_task(_send(client, queue, snapshot))
         try:
-            while (await client.receive())["type"] != "websocket.disconnect":
-                pass
+            while (msg := await client.receive())["type"] != "websocket.disconnect":
+                _command(on_command, msg.get("text"))
         finally:
             sender.cancel()
             hub.leave(queue)
@@ -192,7 +202,7 @@ def _taken(port: int) -> bool:
     return False
 
 
-def serve(hub: Hub, port: int) -> str | None:
+def serve(hub: Hub, port: int, on_command: Commands | None = None) -> str | None:
     if port and _taken(port):
         return None
     sock = socket.socket()
@@ -204,7 +214,7 @@ def serve(hub: Hub, port: int) -> str | None:
         sock.close()
         return None
     url = f"http://{HOST}:{sock.getsockname()[1]}/"
-    server = uvicorn.Server(uvicorn.Config(make_app(hub), log_level="warning", lifespan="off"))
+    server = uvicorn.Server(uvicorn.Config(make_app(hub, on_command), log_level="warning", lifespan="off"))
     thread = threading.Thread(target=server.run, args=([sock],), name="view-server", daemon=True)
     thread.start()
     while not server.started and thread.is_alive():
