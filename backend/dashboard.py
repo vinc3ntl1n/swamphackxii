@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-from backend import config, server
+from backend import config, server, summary
 from backend.capture.csi import Frame
 from backend.detection.detector import Verdict
 from backend.detection.fallflow import ALERTED, COUNTDOWN, FALL_CANDIDATE, IDLE, Sink
@@ -57,32 +57,80 @@ class History:
         self.sim = False
         self.sim_falls: set[int] = set()
         self.last_fall = self.last_notice = 0
+        self.falls: dict[int, list[dict]] = {}
+        self.summarized: set[int] = set()
+        self.lock = threading.Lock()
         if not path.exists():
             return
-        lines = path.read_text().splitlines()
-        for i, line in enumerate(lines):
+        entries = []
+        for line in path.read_text().splitlines():
             try:
-                entry = json.loads(line)
+                entries.append(json.loads(line))
             except ValueError:
                 continue
-            if isinstance(entry.get("fall"), int):
-                self.last_fall = max(self.last_fall, entry["fall"])
-            if entry.get("what") == "notify" and isinstance(entry.get("id"), int):
-                self.last_notice = max(self.last_notice, entry["id"])
-            if i >= len(lines) - HISTORY_SHOWN:
-                self.hub.publish({"type": "history", **entry})
+        for entry in entries:
+            self._note(entry)
+        # Older Fall Summaries are replayed too, so the full list has them, not just the recent ones.
+        shown = len(entries) - HISTORY_SHOWN
+        older = [e for e in entries[:max(shown, 0)] if e.get("what") == "summary"]
+        for entry in [*older[-config.SUMMARIES_SHOWN:], *entries[max(shown, 0):]]:
+            self.hub.publish({"type": "history", **entry})
+
+    def _note(self, entry: dict) -> None:
+        fall = entry.get("fall")
+        if isinstance(fall, int):
+            self.last_fall = max(self.last_fall, fall)
+            self.falls.setdefault(fall, []).append(entry)
+            if entry.get("what") == "summary":
+                self.summarized.add(fall)
+        if entry.get("what") == "notify" and isinstance(entry.get("id"), int):
+            self.last_notice = max(self.last_notice, entry["id"])
 
     def add(self, t: float, what: str, **fields) -> None:
         fall = fields.get("fall")
         sim = fall in self.sim_falls if isinstance(fall, int) else self.sim
-        entry = {"t": t, "what": what, "mode": "sim" if sim else self.mode, **fields}
+        # t is packet time (a replay's own clock); wall is when it really happened, for showing dates.
+        entry = {"t": t, "wall": time.time(), "what": what, "mode": "sim" if sim else self.mode, **fields}
+        with self.lock:
+            self._note(entry)
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                with self.path.open("a") as f:
+                    f.write(json.dumps(entry) + "\n")
+            except OSError as e:
+                print(f"  (history not saved: {e})", flush=True)
+            self.hub.publish({"type": "history", **entry})
+
+    def entries(self, fall: int) -> list[dict]:
+        with self.lock:
+            return list(self.falls.get(fall, ()))
+
+
+class Summaries:
+    """Writes one Fall Summary per closed fall, off the detection thread (see docs/adr/0003)."""
+
+    def __init__(self, hub: server.Hub, history: History, background: bool = True) -> None:
+        self.hub, self.history, self.background = hub, history, background
+
+    def close(self, t: float, fall: int) -> None:
+        entries = self.history.entries(fall)
+        if fall in self.history.summarized or not entries:
+            return
+        self.history.summarized.add(fall)
+        metrics = summary.metrics(entries)
+        self.hub.publish({"type": "summary_pending", "t": t, "fall": fall, "metrics": metrics})
+        if self.background:
+            threading.Thread(target=self._write, args=(t, fall, metrics), name="fall-summary", daemon=True).start()
+        else:
+            self._write(t, fall, metrics)
+
+    def _write(self, t: float, fall: int, metrics: dict) -> None:
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a") as f:
-                f.write(json.dumps(entry) + "\n")
-        except OSError as e:
-            print(f"  (history not saved: {e})", flush=True)
-        self.hub.publish({"type": "history", **entry})
+            text, source = summary.write(metrics)
+        except Exception:
+            traceback.print_exc()
+            text, source = summary.template(metrics), "template"
+        self.history.add(t, "summary", fall=fall, text=text, source=source, metrics=metrics)
 
 
 class Notices:
@@ -120,11 +168,15 @@ class Notices:
 
 
 class WebSink:
-    def __init__(self, hub: server.Hub, history: History, notices: Notices) -> None:
+    def __init__(self, hub: server.Hub, history: History, notices: Notices,
+                 summaries: Summaries | None = None) -> None:
         self.hub, self.history, self.notices = hub, history, notices
+        self.summaries = summaries or Summaries(hub, history)
         self.fall = history.last_fall
         self.fall_t: float | None = None
         self.alert_t: float | None = None
+        self.fall_wall: float | None = None
+        self.help_t: float | None = None
 
     def log(self, t: float, text: str) -> None:
         self.hub.publish({"type": "log", "t": t, "text": text})
@@ -134,7 +186,8 @@ class WebSink:
 
     def ask_resident(self, t: float) -> None:
         self.fall += 1
-        self.fall_t, self.alert_t = t, None
+        self.fall_t, self.alert_t, self.help_t = t, None, None
+        self.fall_wall = time.time()
         if self.history.sim:
             self.history.sim_falls.add(self.fall)
         self.notices.send(t, "resident", "check_in", self.fall,
@@ -144,7 +197,7 @@ class WebSink:
         self.alert_t = t
         self.history.add(t, "alert", fall=self.fall)
         self.notices.send(t, "caregiver", "alert", self.fall,
-                          f"ALERT: the Resident may have fallen at {clock(self.fall_t or t)} "
+                          f"ALERT: the Resident may have fallen at {clock(self.fall_wall or time.time())} "
                           "and did not answer the Check-in.")
 
     def event(self, t: float, event: MotionEvent, verdict: Verdict, links: str, sim: bool) -> None:
@@ -361,6 +414,7 @@ class Dashboard:
         elif cmd == "cancel":
             if flow.state == COUNTDOWN:
                 web.history.add(now, "countdown_cancelled", fall=web.fall, by="caregiver")
+                web.summaries.close(now, web.fall)
                 self._sim(None)
             flow.cancel(now, "the Caregiver")
         elif cmd == "resolve":
@@ -368,6 +422,7 @@ class Dashboard:
             if flow.state != ALERTED or reason not in RESOLVE_REASONS:
                 return
             web.history.add(now, "resolved", fall=web.fall, reason=reason)
+            web.summaries.close(now, web.fall)
             self._sim(None)
             flow.reset(now)
         elif cmd == "call":
@@ -399,17 +454,17 @@ class Dashboard:
             self.sink.log(now, f"Stale Answer ignored: {cmd} for fall {fall if fall is not None else '?'}")
             return
         if cmd == "help":
+            if not flow.escalate(now):
+                self.sink.log(now, f"Help Request ignored: already {flow.state}")
+                return
+            web.alert_t = web.help_t = now
             web.history.add(now, "help_request", fall=web.fall)
-            self.sink.log(now, "Help Request from the Resident")
-            escalate = getattr(flow, "escalate", None)
-            if flow.state == COUNTDOWN and escalate is not None:
-                escalate(now)
-            else:
-                web.notices.send(now, "caregiver", "help", web.fall,
-                                 f"The Resident asked for help (fall at {clock(web.fall_t or now)}).")
+            web.notices.send(now, "caregiver", "help", web.fall,
+                             f"The Resident asked for help (fall at {clock(web.fall_wall or time.time())}).")
             return
         if flow.state == COUNTDOWN:
             web.history.add(now, "countdown_cancelled", fall=web.fall, by="resident")
+            web.summaries.close(now, web.fall)
             self._sim(None)
             flow.cancel(now, "the Resident (I'm OK)")
             return
@@ -418,6 +473,7 @@ class Dashboard:
         self.sink.log(now, f"Late Answer: the Resident is OK ({late} s after the Alert)")
         web.notices.send(now, "caregiver", "all_clear", web.fall,
                          f"All clear: the Resident answered they're OK, {late} s after the Alert.")
+        web.summaries.close(now, web.fall)
         self._sim(None)
         flow.reset(now)
 
@@ -438,7 +494,8 @@ class Dashboard:
 
     def _state(self, now: float) -> None:
         flow = self.pipe.flow
-        key = (flow.state, flow.started, flow.deadline, self.sim is not None)
+        help_t = self.web.help_t if flow.state == ALERTED else None
+        key = (flow.state, flow.started, flow.deadline, self.sim is not None, help_t)
         timed = flow.state in (FALL_CANDIDATE, COUNTDOWN)
         if key == self.sent and not (timed and time.monotonic() - self.sent_at >= STATE_EVERY_S):
             return
@@ -447,6 +504,7 @@ class Dashboard:
             "type": "state", "state": flow.state,
             "t": flow.started if flow.started is not None else now,
             "deadline": flow.deadline, "now": now, "sim": self.sim is not None, "fall": self.web.fall,
+            "help": help_t,
         })
 
     def _flush(self) -> None:
