@@ -106,12 +106,14 @@ def main() -> None:
 
 def start_view(args, console: ConsoleSink):
     from pathlib import Path
-    from backend import server
+    from backend import server, store
     from backend.dashboard import HISTORY, SIM_FALL, Dashboard, History, Notices, Tee, WebSink, load_env
 
     load_env()
     hub = server.Hub()
-    history = History(hub, "replay" if args.replay else "live", Path(args.history) if args.history else HISTORY)
+    tiger = store.from_env()
+    history = History(hub, "replay" if args.replay else "live", Path(args.history) if args.history else HISTORY,
+                      tiger)
     web = WebSink(hub, history, Notices(hub, history))
     sink = Tee(console, web)
     pipe = Pipeline(sink, detector.make(args.detector, args.model))
@@ -123,9 +125,9 @@ def start_view(args, console: ConsoleSink):
                  "stillness_s": config.STILLNESS_S, "countdown_s": config.COUNTDOWN_S,
                  "detector": pipe.detector.name, "links": sorted(config.RECEIVERS),
                  "resident_phone": os.environ.get("RESIDENT_PHONE", ""),
-                 "resident_name": os.environ.get("RESIDENT_NAME", "")})
+                 "resident_name": os.environ.get("RESIDENT_NAME", ""), "trends": tiger is not None})
     try:
-        url = server.serve(hub, args.view_port, view.on_command)
+        url = server.serve(hub, args.view_port, view.on_command, tiger.trends if tiger else None)
     except Exception as e:
         print(f"  (dashboard off: {e!r}; detecting anyway)", flush=True)
         return None

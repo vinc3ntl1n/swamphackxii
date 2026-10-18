@@ -862,6 +862,38 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
   letter-spacing: 0.02em;
 }
 
+.care-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid #f3cf6a;
+  background: #fff1c2;
+  color: #7a5200;
+  font-family: "DM Sans", system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.care-flag::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--watch);
+  animation: flag-blink 1.2s ease-in-out infinite;
+}
+
+.care-flag[hidden] {
+  display: none;
+}
+
+@keyframes flag-blink {
+  50% { opacity: 0.3; }
+}
+
 .care-card[data-tone="alert"] .care-pill {
   background: rgba(255, 255, 255, 0.22);
 }
@@ -1690,6 +1722,83 @@ body:not(.friendly-page) .brand {
   font-family: "DotGothic16", system-ui, sans-serif;
 }
 
+pulse-wifi {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  color: var(--calm);
+  line-height: 0;
+  transition: color 0.4s ease;
+}
+
+pulse-wifi svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+pulse-wifi .wifi-dot {
+  fill: currentColor;
+}
+
+pulse-wifi .wifi-band {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  transition: opacity 0.4s ease;
+}
+
+/* Mostly static: when live, the outermost band breathes slowly. */
+pulse-wifi:not([state="off"]) .wifi-band:last-child {
+  animation: wifi-breathe 3.2s ease-in-out infinite;
+}
+
+pulse-wifi[state="off"] {
+  color: var(--muted);
+}
+
+pulse-wifi[state="off"] .wifi-band {
+  opacity: calc(1.15 - var(--i) / var(--n));
+}
+
+@keyframes wifi-breathe {
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  pulse-wifi .wifi-band { animation: none !important; }
+}
+
+pulse-wifi[pixel] .wifi-dot,
+pulse-wifi[pixel] .wifi-band {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* Just off the logo gator's snout, as if it is sending. */
+.brand-wifi {
+  width: 0.75em;
+  height: 0.75em;
+  margin-left: -8px;
+  align-self: flex-start;
+}
+
+/* Pinned to the gator's box, not the model, so it stays put while the gator turns.
+   Sits under the model (z-index 1) as a faded backdrop. */
+.gator-wifi {
+  position: absolute;
+  top: 0;
+  right: 4%;
+  width: 36%;
+  height: auto;
+  aspect-ratio: 1;
+  color: var(--tone, var(--calm));
+  opacity: 0.32;
+  pointer-events: none;
+  z-index: 0;
+}
+
 .care-sub,
 .resident-sub,
 .act-text,
@@ -1965,4 +2074,175 @@ body[data-view="dev"] .bg-dots {
   color: var(--muted);
   font-size: 14px;
   font-weight: 700;
+}
+
+/* Trends from Tiger Data: a tab in the dev log card, and the Caregiver's "Past two weeks" overlay */
+
+.sum-links {
+  display: inline-flex;
+  gap: 14px;
+}
+
+.trends {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.dev-trends {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  flex: 1 1 auto;
+}
+
+.dev-trends[hidden] {
+  display: none;
+}
+
+.care-trends {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.trend {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.trend header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+.trend h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.care-trends .trend h3 {
+  font-size: 17px;
+}
+
+.trend-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.trend-plot {
+  flex: 1 1 auto;
+  min-height: 110px;
+}
+
+.care-trends .trend-plot {
+  height: 170px;
+  flex: 0 0 auto;
+}
+
+.trend-plot svg {
+  display: block;
+  overflow: visible;
+}
+
+.trend-grid {
+  stroke: var(--grid);
+  stroke-width: 1;
+}
+
+.trend-axis {
+  stroke: var(--axis);
+  stroke-width: 1;
+}
+
+.trend-ref {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.trend-tick {
+  fill: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-line {
+  fill: none;
+  stroke: var(--series);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.trend-dot {
+  fill: var(--series);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.trend-wash {
+  fill: var(--series-wash);
+}
+
+.trend-hit {
+  fill: transparent;
+}
+
+.trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin: 4px 0 2px;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.trend-legend .swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+  border-radius: 2px;
+}
+
+.trend-table {
+  margin-top: 2px;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.trend-table summary {
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.trend-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-table th,
+.trend-table td {
+  padding: 2px 4px;
+  text-align: left;
+}
+
+.trend-message {
+  margin: 12px 2px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+@media (max-width: 900px) {
+  .dev-trends {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

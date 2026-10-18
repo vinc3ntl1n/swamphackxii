@@ -17,6 +17,7 @@ from backend.detection.detector import Verdict
 from backend.detection.fallflow import ALERTED, COUNTDOWN, FALL_CANDIDATE, IDLE, Sink
 from backend.detection.motion import FrameInfo, MotionEvent, MotionTracker
 from backend.detection.pipeline import Pipeline
+from backend.store import Store
 from backend.training import recordings
 
 SIM_FALL = Path(__file__).resolve().parent / "assets" / "sim_fall.log.gz"
@@ -52,8 +53,8 @@ def clock(t: float) -> str:
 class History:
     """Falls, Check-ins, answers and Alerts, kept in data/history.jsonl across runs."""
 
-    def __init__(self, hub: server.Hub, mode: str, path: Path = HISTORY) -> None:
-        self.hub, self.mode, self.path = hub, mode, path
+    def __init__(self, hub: server.Hub, mode: str, path: Path = HISTORY, store: Store | None = None) -> None:
+        self.hub, self.mode, self.path, self.store = hub, mode, path, store
         self.sim = False
         self.sim_falls: set[int] = set()
         self.last_fall = self.last_notice = 0
@@ -99,6 +100,8 @@ class History:
                     f.write(json.dumps(entry) + "\n")
             except OSError as e:
                 print(f"  (history not saved: {e})", flush=True)
+            if self.store is not None:
+                self.store.history(entry)
             self.hub.publish({"type": "history", **entry})
 
     def entries(self, fall: int) -> list[dict]:
@@ -213,6 +216,8 @@ class WebSink:
             "details": details, "why": why, "start": event.start, "end": event.end, "sim": sim,
         }
         self.hub.publish({"type": "event", "t": t, **msg})
+        if self.history.store is not None:
+            self.history.store.motion(time.time(), "sim" if sim else self.history.mode, msg)
         if verdict.label == "fall" and why == "classified":
             self.history.add(t, "confirmed_fall", fall=self.fall, links=links, details=details)
 

@@ -180,6 +180,8 @@ When a replay of a Recording ends, its last second is repeated for 5.5 s so the 
 
 Everything in History is appended to `data/history.jsonl`, tagged `live`, `replay` or `sim`. Each entry's `t` is packet time, which in a replay is the Recording's own clock, so durations stay right at any `--speed`. `wall` is the computer's time when it happened, and that is what the pages show as the date. Phone numbers, the Resident's name and the Gemini key go in a `.env` file at the repo root (`RESIDENT_PHONE=...`, `CAREGIVER_PHONE=...`, `RESIDENT_NAME=...`, `GEMINI_API_KEY=...`). Both files are gitignored.
 
+**Trends** ([docs/adr/0004](docs/adr/0004-tiger-as-copy-only-trend-store.md)): with `TIGER_DATABASE_URL=...` in `.env` (a Tiger Data service's connection string), every History entry and every Motion Event is also copied to Tiger Data from a background thread. `data/history.jsonl` stays in charge, so the dashboard works the same when Tiger is down or unset. Confirmed Falls per day and Motion Events per hour come from two continuous aggregates, and Motion Events older than 7 days are compressed. The Dev view shows them in a **Trends** tab of the log card (with average Room Change per hour). The Caregiver view shows them under **Past two weeks**, without Room Change. Simulated Falls are left out. To load past History into Tiger, run `python -m backend.store backfill`. It is safe to run again: rows already there are skipped. Without the URL, the tab and the link are hidden.
+
 #### Messages and commands
 
 On top of the record page's messages, `run.py` sends `frame`s with a `"link"` field (one feed per Link) and:

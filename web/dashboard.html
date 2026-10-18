@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>pulse.</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <script type="importmap">
 {
   "imports": {
@@ -51,7 +52,7 @@
 </template>
 
 <header class="topbar">
-  <span class="brand"><img class="brand-logo" src="gator_side.png" alt="">pulse.</span>
+  <span class="brand"><img class="brand-logo" src="gator_side.png" alt=""><pulse-wifi class="brand-wifi" data-conn state="off" dir="70"></pulse-wifi>pulse.</span>
   <div class="toggle views" role="group" aria-label="View">
     <span class="views-thumb" aria-hidden="true"></span>
     <button type="button" data-view="caregiver">Caregiver</button>
@@ -64,9 +65,10 @@
 
 <main class="care" id="caregiver">
   <section class="care-card glass-card" id="cg-card" data-tone="calm" role="status" aria-live="polite">
-    <div class="care-gator" id="cg-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 0deg 130deg" camera-orbit="0deg 55deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
+    <div class="care-gator" id="cg-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 0deg 130deg" camera-orbit="0deg 55deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div><pulse-wifi class="gator-wifi" data-conn state="off" bands="4" spread="70" pixel="1.5"></pulse-wifi></div>
     <div class="care-body">
       <span class="care-pill" id="cg-pill">Watching</span>
+      <span class="care-flag" id="cg-flag" hidden></span>
       <h1 class="care-word" id="cg-word">Connecting…</h1>
       <p class="care-sub" id="cg-sub"></p>
       <div class="care-timer" id="cg-timer" hidden>
@@ -86,7 +88,7 @@
   </section>
   <section class="care-side">
     <figure class="soft-card glass-card summary" id="cg-summary" data-state="empty">
-      <header><h2>Latest fall</h2><button type="button" class="link-btn" id="cg-all" hidden>All fall summaries</button></header>
+      <header><h2>Latest fall</h2><span class="sum-links"><button type="button" class="link-btn" id="cg-trends" hidden>Past two weeks</button><button type="button" class="link-btn" id="cg-all" hidden>All fall summaries</button></span></header>
       <p class="sum-live" id="cg-sum-live" hidden>Fall in progress</p>
       <p class="sum-when" id="cg-sum-when" hidden></p>
       <p class="sum-text" id="cg-sum-text">No falls yet.</p>
@@ -105,7 +107,7 @@
 
 <main class="resident" id="resident" hidden>
   <div class="resident-card glass-card" id="resident-card" data-tone="calm" role="status" aria-live="assertive">
-    <div class="resident-gator" id="res-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 0deg 130deg" camera-orbit="0deg 55deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
+    <div class="resident-gator" id="res-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 0deg 130deg" camera-orbit="0deg 55deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div><pulse-wifi class="gator-wifi" data-conn state="off" bands="4" spread="70" pixel="1.5"></pulse-wifi></div>
     <div class="resident-word" id="resident-word">All good</div>
     <div class="resident-sub" id="resident-sub">Pulse is on</div>
     <div class="resident-buttons" id="resident-buttons" hidden>
@@ -183,11 +185,13 @@
         <div class="toggle tabs" role="tablist" aria-label="Log">
           <button type="button" role="tab" data-tab="live" aria-selected="true" aria-pressed="true">Live</button>
           <button type="button" role="tab" data-tab="history" aria-selected="false" aria-pressed="false">History</button>
+          <button type="button" role="tab" data-tab="trends" aria-selected="false" aria-pressed="false" id="tab-trends" hidden>Trends</button>
         </div>
         <span class="note" id="log-note">this run, newest first</span>
       </header>
       <ol class="events" id="events"></ol>
       <ol class="events" id="history" hidden></ol>
+      <div class="trends dev-trends" id="dev-trends" hidden></div>
     </figure>
   </section>
 </main>
@@ -197,9 +201,15 @@
   <ol class="falls-list" id="falls-list"></ol>
   <p class="falls-note" id="falls-note" hidden>Older falls are in the history file.</p>
 </dialog>
+<dialog class="falls-dialog trends-dialog" id="trends-dialog" aria-labelledby="trends-title">
+  <header><h2 id="trends-title">Past two weeks</h2><button type="button" class="link-btn close" id="trends-close" aria-label="Close">✕</button></header>
+  <div class="trends care-trends" id="care-trends"></div>
+</dialog>
 
 <script type="module">
 import { SignalBuffer, Waveform, EnergyChart, readTheme, watchTheme, connect, timeAtX } from "./signal.js";
+import { fetchTrends, renderTrends, renderTrendsMessage } from "./trends.js";
+import "./wifi.js";
 
 const $ = (id) => document.getElementById(id);
 const STALE_MS = 2000;
@@ -239,6 +249,7 @@ const HISTORY_TEXT = {
   },
 };
 const SUMMARIES_SHOWN = 50;
+const TRENDS_EVERY_MS = 60000;
 const OUTCOME = {
   resident_ok: (they) => `${they} said they're OK`,
   caregiver_cancelled: () => "You cancelled the alert",
@@ -267,6 +278,8 @@ let hover = null;
 let muted = false;
 let audio = null;
 let beepTimer = null;
+let trends = null;
+let trendsFailed = false;
 try {
   muted = localStorage.getItem("dash-muted") === "1";
 } catch {}
@@ -544,6 +557,9 @@ function onMessage(msg) {
   } else if (msg.type === "config") {
     st.cfg = msg;
     for (const name of msg.links ?? []) linkFor(name);
+    show($("cg-trends"), !!msg.trends);
+    show($("tab-trends"), !!msg.trends);
+    if (!msg.trends && tab === "trends") setTab("live");
   } else if (msg.type === "state") {
     if (msg.sim) st.simTag = true;
     else if (msg.state === "IDLE") st.simTag = false;
@@ -564,6 +580,7 @@ function onMessage(msg) {
 
 function onState(s) {
   conn = s;
+  for (const w of document.querySelectorAll("pulse-wifi[data-conn]")) w.setAttribute("state", s === "open" ? "live" : "off");
   if (s !== "open") return;
   ever = true;
   st = fresh();
@@ -894,7 +911,7 @@ function careFor(nowMs) {
   const s = flowState();
   const tl = timeLeft(nowMs);
   if (s === "FALL_CANDIDATE") {
-    return { tone: "watch", mood: "worried", pill: "Checking", word: "Possible fall", sub: "Checking whether it was a fall…", timer: tl, fill: tl ? 1 - tl.left / tl.span : 0 };
+    return { tone: "calm", mood: "happy", pill: "Watching", word: "All is well", sub: "Double-checking a sudden movement. Nothing needed from you yet.", flag: `Potential fall detected · checking${tl ? ` ${tl.secs} s` : "…"}` };
   }
   if (s === "COUNTDOWN") {
     return {
@@ -1028,6 +1045,8 @@ function renderCare(nowMs) {
   card.classList.toggle("asked-help", !!c.help);
   gator($("cg-gator"), c.mood);
   setText($("cg-pill"), c.pill);
+  show($("cg-flag"), !!c.flag);
+  if (c.flag) setText($("cg-flag"), c.flag);
   setText($("cg-word"), c.word);
   setText($("cg-sub"), c.sub);
   show($("cg-timer"), !!c.timer);
@@ -1266,6 +1285,7 @@ function setView(next) {
   if (view === "caregiver") url.searchParams.delete("view");
   else url.searchParams.set("view", view);
   history.replaceState(null, "", url);
+  if (view === "dev" && tab === "trends") loadTrends();
 }
 
 function placeThumb() {
@@ -1280,11 +1300,48 @@ function setTab(next) {
   tab = next;
   $("events").hidden = tab !== "live";
   $("history").hidden = tab !== "history";
-  setText($("log-note"), tab === "live" ? "this run, newest first" : "Confirmed Falls, Check-ins and Alerts across runs");
+  $("dev-trends").hidden = tab !== "trends";
+  const notes = {
+    live: "this run, newest first",
+    history: "Confirmed Falls, Check-ins and Alerts across runs",
+    trends: "from Tiger Data · real runs, no Simulated Falls",
+  };
+  setText($("log-note"), notes[tab]);
   for (const b of document.querySelectorAll(".tabs button")) {
     b.setAttribute("aria-pressed", String(b.dataset.tab === tab));
     b.setAttribute("aria-selected", String(b.dataset.tab === tab));
   }
+  if (tab === "trends") loadTrends();
+}
+
+// Trends come from Tiger Data through the backend; the rest of the page never waits on them.
+function trendsShown() {
+  if ($("trends-dialog").open) return { host: $("care-trends"), mode: "care" };
+  if (view === "dev" && tab === "trends") return { host: $("dev-trends"), mode: "dev" };
+  return null;
+}
+
+function drawTrends() {
+  const shown = trendsShown();
+  if (!shown) return;
+  if (trends) renderTrends(shown.host, trends, shown.mode, st.cfg);
+  else if (trendsFailed) {
+    renderTrendsMessage(shown.host, shown.mode === "dev"
+      ? "Trends unavailable: Tiger Data can't be reached right now."
+      : "Couldn't load the past two weeks right now. Try again in a minute.");
+  } else renderTrendsMessage(shown.host, "Loading…");
+}
+
+async function loadTrends() {
+  if (!trendsShown()) return;
+  drawTrends();
+  try {
+    trends = await fetchTrends();
+    trendsFailed = false;
+  } catch {
+    trendsFailed = true;
+  }
+  drawTrends();
 }
 
 function loop() {
@@ -1347,6 +1404,18 @@ $("cg-all").addEventListener("click", () => {
   $("falls").showModal();
 });
 $("falls-close").addEventListener("click", () => $("falls").close());
+$("cg-trends").addEventListener("click", () => {
+  $("trends-dialog").showModal();
+  loadTrends();
+});
+$("trends-close").addEventListener("click", () => $("trends-dialog").close());
+$("trends-dialog").addEventListener("click", (e) => {
+  if (e.target === $("trends-dialog")) $("trends-dialog").close();
+});
+$("trends-dialog").addEventListener("close", () => {
+  for (const tip of document.querySelectorAll(".trend-tip")) tip.hidden = true;
+});
+setInterval(loadTrends, TRENDS_EVERY_MS);
 $("falls").addEventListener("click", (e) => {
   if (e.target === $("falls")) $("falls").close();
 });
@@ -1367,7 +1436,10 @@ watchTheme(() => {
   theme = readTheme(document.body);
   soft = readTheme($("caregiver"));
 });
-addEventListener("resize", placeThumb);
+addEventListener("resize", () => {
+  placeThumb();
+  drawTrends();
+});
 document.fonts?.ready.then(placeThumb);
 setView(view);
 setTab(tab);
