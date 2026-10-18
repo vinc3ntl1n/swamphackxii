@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import logging
 import os
 import time
 from datetime import datetime
@@ -8,8 +10,10 @@ from pathlib import Path
 
 from backend import config
 from backend.detection import detector
+from backend.detection import features
 from backend.detection.motion import CALIBRATING
 from backend.detection.pipeline import Pipeline
+from backend.diagnostics import CaptureLogHandler, DiagnosticSink, EventLog, RuntimeMonitor
 
 
 class ConsoleSink:
@@ -43,6 +47,8 @@ def main() -> None:
     ap.add_argument("--detector", choices=("threshold", "rf"), default=config.DETECTOR)
     ap.add_argument("--model", type=Path, default=detector.MODEL_PATH,
                     help="saved forest to load with --detector rf")
+    ap.add_argument("--diagnostics", type=Path,
+                    help="JSONL diagnostics (live default: beside the raw session log)")
     ap.add_argument("--view", action=argparse.BooleanOptionalAction, default=True,
                     help="serve the live dashboard and open it in the browser (--no-view turns it off)")
     ap.add_argument("--view-port", type=int, default=8000, help="port for the dashboard")
@@ -50,7 +56,7 @@ def main() -> None:
     ap.add_argument("--history", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
-    cals = None
+    cals, frames, ports, log_path = None, None, {}, None
     if args.replay and not os.path.exists(args.replay):
         ap.exit(1, f"No such file: {args.replay}\n"
                    "Recordings live in R2 now: run python -m backend.sync pull first, "
@@ -62,34 +68,78 @@ def main() -> None:
         frames = held(replay_frames(args.replay, args.speed), HOLD_S if cals else 0.0, args.speed)
         print(f"REPLAY {args.replay}")
     else:
-        from backend.capture.live import SESSIONS, live_frames, receivers
+        from backend.capture.live import SESSIONS, receivers
         ports = receivers(args.port, args.port_b)
         SESSIONS.mkdir(parents=True, exist_ok=True)
-        log_path = SESSIONS / f"{datetime.now():%Y%m%d-%H%M%S}.log"
-        frames = live_frames(ports, log_path)
+        log_path = SESSIONS / f"{datetime.now():%Y%m%d-%H%M%S-%f}.log"
         print(f"LIVE {', '.join(f'{link} {port}' for link, port in ports.items())}, saving to {log_path}")
 
-    sink = ConsoleSink()
-    view = start_view(args, sink) if args.view else None
-    pipe = view.pipe if view else Pipeline(sink, detector.make(args.detector, args.model))
-    print(f"Detector: {pipe.detector.name}")
-    if cals:
-        from backend.dashboard import preload
-        preload(pipe, cals)
-        print(f"Using the Recording's calibration for link{'s' if len(cals) > 1 else ''} {', '.join(sorted(cals))}")
-    else:
-        print("Calibrating: keep the area between the boards still for 10 s...")
-    process = view.process if view else pipe.process
-    last_level: dict[str, str] = {}
+    diagnostics_path = args.diagnostics or (log_path.with_suffix(".events.jsonl") if log_path else None)
+    events = EventLog(diagnostics_path) if diagnostics_path else None
     try:
+        _run(args, frames, cals, ports, log_path, events)
+    finally:
+        if events:
+            events.close()
+
+
+def _run(args, frames, cals, ports, log_path, events: EventLog | None) -> None:
+    console = ConsoleSink()
+    sink = DiagnosticSink(console, events) if events else console
+    view = None
+    capture_logger, handler, old_level = None, None, None
+    try:
+        view = start_view(args, sink, events) if args.view else None
+        pipe = view.pipe if view else Pipeline(sink, detector.make(args.detector, args.model))
+        monitor = RuntimeMonitor(events, live=not args.replay) if events and not view else None
+        print(f"Detector: {pipe.detector.name}")
+        if events:
+            events.write("run_started", mode="replay" if args.replay else "live",
+                         raw_log=str(log_path) if log_path else args.replay, receivers=ports,
+                         detector=pipe.detector.name, features=features.NAMES,
+                         model=str(args.model) if args.detector == "rf" else None,
+                         model_sha256=(hashlib.sha256(args.model.read_bytes()).hexdigest()
+                                       if args.detector == "rf" else None),
+                         trained_at=getattr(pipe.detector, "trained_at", None),
+                         fall_threshold=getattr(pipe.detector, "fall_threshold", None))
+            print(f"Diagnostics: {events.path}", flush=True)
+        if cals:
+            from backend.dashboard import preload
+            preload(pipe, cals)
+            print(f"Using the Recording's calibration for link{'s' if len(cals) > 1 else ''} {', '.join(sorted(cals))}")
+        else:
+            print("Calibrating: keep the area between the boards still for 10 s...")
+        if not args.replay:
+            from backend.capture import live
+
+            def capture_health(health: dict) -> None:
+                if view:
+                    view.capture_health(health)
+                else:
+                    _capture_health(pipe, health)
+                    if monitor and health.get("idle"):
+                        monitor.tick(pipe, health["capture_wall_t"])
+
+            if events:
+                capture_logger = live.LOGGER
+                old_level = capture_logger.level
+                handler = CaptureLogHandler(events)
+                capture_logger.addHandler(handler)
+                capture_logger.setLevel(logging.INFO)
+            frames = live.live_frames(ports, log_path, health_callback=capture_health)
+        process = view.process if view else pipe.process
+        last_level: dict[str, str] = {}
         for frame in frames:
-            if sink.t0 is None:
-                sink.t0 = frame.t
+            if console.t0 is None:
+                console.t0 = frame.t
+            started = time.perf_counter()
             info, _ = process(frame)
+            if monitor:
+                monitor.observe(pipe, frame, (time.perf_counter() - started) * 1000)
             if info.level != last_level.get(frame.link, CALIBRATING) and info.level != CALIBRATING:
                 energy = f"{info.energy:.1f}x" if info.energy is not None else "--"
                 name = f" {frame.link}" if len(pipe.trackers) > 1 else ""
-                print(f"{sink._stamp(info.t)}   level{name}: {info.level} ({energy})", flush=True)
+                print(f"{console._stamp(info.t)}   level{name}: {info.level} ({energy})", flush=True)
             last_level[frame.link] = info.level
         if view:
             view.ended()
@@ -100,11 +150,26 @@ def main() -> None:
     except KeyboardInterrupt:
         print()
     finally:
+        if frames is not None and hasattr(frames, "close"):
+            frames.close()
         if view:
+            view.close()
             view.hub.close(1.0)
+        if capture_logger is not None:
+            capture_logger.removeHandler(handler)
+            capture_logger.setLevel(old_level)
+        if events:
+            events.write("run_stopped")
 
 
-def start_view(args, console: ConsoleSink):
+def _capture_health(pipe: Pipeline, health: dict) -> None:
+    if health.get("dropped_since_report", 0):
+        pipe.capture_gap(health["last_drop"]["capture_t"], health.get("dropped_links"))
+    if health.get("idle"):
+        pipe.tick(health["capture_wall_t"])
+
+
+def start_view(args, console, diagnostics: EventLog | None = None):
     from pathlib import Path
     from backend import server
     from backend.dashboard import HISTORY, SIM_FALL, Dashboard, History, Notices, Tee, WebSink, load_env
@@ -115,7 +180,8 @@ def start_view(args, console: ConsoleSink):
     web = WebSink(hub, history, Notices(hub, history))
     sink = Tee(console, web)
     pipe = Pipeline(sink, detector.make(args.detector, args.model))
-    view = Dashboard(hub, pipe, sink, web, Path(args.sim_fall) if args.sim_fall else SIM_FALL)
+    view = Dashboard(hub, pipe, sink, web, Path(args.sim_fall) if args.sim_fall else SIM_FALL,
+                     diagnostics=diagnostics, live=not args.replay)
     hub.publish({"type": "source", "mode": "REPLAY" if args.replay else "LIVE"})
     hub.publish({"type": "config", "t_on": config.T_ON, "t_off": config.T_OFF,
                  "calibrate_s": config.CALIBRATE_S, "t_fall": config.T_FALL,

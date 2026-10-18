@@ -8,9 +8,11 @@ import numpy as np
 from backend import config
 from backend.capture.csi import DEFAULT_LINK, Frame
 
-CALIBRATING, NO_MOTION, MOVING = "calibrating", "no motion", "moving"
+CALIBRATING, NO_MOTION, MOVING, STALE, WARMING = "calibrating", "no motion", "moving", "stale", "warming"
 MEASURE = "mean-shift-0.5"
 MIN_HALF_FRAMES = 4
+# Older windows cannot describe a continuous event after capture drops a backlog.
+PACKET_GAP_S = 0.5
 
 
 @dataclass
@@ -19,6 +21,7 @@ class FrameInfo:
     level: str
     energy: float | None
     amp: np.ndarray | None
+    reason: str | None = None
 
 
 @dataclass
@@ -82,6 +85,18 @@ class MotionTracker:
         self.energy = 0.0
         self.event_start: float | None = None
         self.quiet_since: float | None = None
+        self.last_valid_t: float | None = None
+        self.last_energy_t: float | None = None
+
+    def interrupt(self, *, stale: bool = False) -> None:
+        """Discard incomplete signal history without inventing an event ending."""
+        self.window.clear()
+        self.history.clear()
+        self.cal_frames.clear()
+        self.event_start = self.quiet_since = None
+        self.energy = 0.0
+        self.last_energy_t = None
+        self.level = STALE if stale else (CALIBRATING if self.baseline is None else NO_MOTION)
 
     def calibration(self) -> dict | None:
         return self.cal
@@ -106,11 +121,20 @@ class MotionTracker:
         return event
 
     def update(self, frame: Frame) -> tuple[FrameInfo, MotionEvent | None]:
+        if not frame.amp.size or not np.isfinite(frame.amp).all():
+            return FrameInfo(frame.t, self.level, None, None, "invalid_amplitude"), None
+        if self.size is not None and frame.amp.size != self.size:
+            return FrameInfo(frame.t, self.level, None, None, "wrong_frame_size"), None
+
+        gap = self.last_valid_t is not None and frame.t - self.last_valid_t > PACKET_GAP_S
+        if gap or self.level == STALE:
+            self.interrupt()
+        self.last_valid_t = frame.t
         if self.baseline is None:
             self._calibrating(frame)
+            # load_calibration resets timestamps along with its old history.
+            self.last_valid_t = frame.t
             return FrameInfo(frame.t, self.level, None, None), None
-        if frame.amp.size != self.size:
-            return FrameInfo(frame.t, self.level, self.energy, None), None
 
         t, amp = frame.t, frame.amp[self.mask]
         self.window.append((t, amp))
@@ -118,16 +142,38 @@ class MotionTracker:
             self.window.popleft()
         raw = raw_energy(np.array([w[0] for w in self.window]),
                          np.stack([w[1] for w in self.window]), t)
-        if raw is not None:
-            self.energy = raw / self.baseline
+        if raw is None:
+            # Missing energy cannot advance a quiet interval toward completion.
+            self.quiet_since = None
+            expired_energy = (self.last_energy_t is not None
+                              and t - self.last_energy_t > PACKET_GAP_S)
+            if expired_energy:
+                self.interrupt()
+            if self.level != MOVING:
+                self.level = WARMING
+            if self.last_energy_t is None and self.event_start is None:
+                # These real amplitudes remain useful for the before-event
+                # reference. Zero is only a pre-event placeholder; _step is
+                # never called until a new energy measurement exists.
+                self._remember(t, 0.0, amp)
+            return FrameInfo(t, self.level, None, amp,
+                             "insufficient_energy_window" if expired_energy
+                             else "packet_gap" if gap else "insufficient_window"), None
+        self.energy = raw / self.baseline
+        self.last_energy_t = t
+        if self.level == WARMING:
+            self.level = NO_MOTION
 
-        self.history.append((t, self.energy, amp))
-        keep_s = config.PRE_EVENT_S + config.MAX_EVENT_S + config.QUIET_S + 1.0
-        while t - self.history[0][0] > keep_s:
-            self.history.popleft()
+        self._remember(t, self.energy, amp)
 
         event = self._step(t, self.energy)
         return FrameInfo(t, self.level, self.energy, amp), event
+
+    def _remember(self, t: float, energy: float, amp: np.ndarray) -> None:
+        self.history.append((t, energy, amp))
+        keep_s = config.PRE_EVENT_S + config.MAX_EVENT_S + config.QUIET_S + 1.0
+        while t - self.history[0][0] > keep_s:
+            self.history.popleft()
 
     def _step(self, t: float, energy: float) -> MotionEvent | None:
         if self.level == NO_MOTION:

@@ -17,6 +17,7 @@ from backend.detection.detector import Verdict
 from backend.detection.fallflow import ALERTED, COUNTDOWN, FALL_CANDIDATE, IDLE, Sink
 from backend.detection.motion import FrameInfo, MotionEvent, MotionTracker
 from backend.detection.pipeline import Pipeline
+from backend.diagnostics import EventLog, RuntimeMonitor
 from backend.training import recordings
 
 SIM_FALL = Path(__file__).resolve().parent / "assets" / "sim_fall.log.gz"
@@ -251,9 +252,9 @@ class Clock:
         self.t: float | None = None
         self.wall = 0.0
 
-    def saw(self, t: float) -> None:
+    def saw(self, t: float, age_s: float = 0.0) -> None:
         if self.t is None or t >= self.t:
-            self.t, self.wall = t, time.monotonic()
+            self.t, self.wall = t, time.monotonic() - age_s
 
     def now(self) -> float:
         return time.time() if self.t is None else self.t + (time.monotonic() - self.wall)
@@ -344,7 +345,8 @@ class Dashboard:
     """Shares the pipeline with the frame loop under one lock, and runs browser and sidecar commands."""
 
     def __init__(self, hub: server.Hub, pipe: Pipeline, sink: Sink, web: WebSink,
-                 sim_path: Path = SIM_FALL) -> None:
+                 sim_path: Path = SIM_FALL, *, diagnostics: EventLog | None = None,
+                 live: bool = False) -> None:
         self.hub, self.pipe, self.sink, self.web = hub, pipe, sink, web
         self.sim_path = sim_path
         self.lock = threading.RLock()
@@ -356,19 +358,42 @@ class Dashboard:
         self.sent: tuple | None = None
         self.sent_at = 0.0
         self.failed = False
+        self.live = live
+        self.monitor = RuntimeMonitor(diagnostics, live=live) if diagnostics else None
+        self.stop = threading.Event()
+        self.worker: threading.Thread | None = None
 
     def on_command(self, msg: dict) -> None:
         self.commands.put(msg)
 
     def start(self) -> None:
-        threading.Thread(target=self._run, name="dashboard-ticker", daemon=True).start()
+        self.worker = threading.Thread(target=self._run, name="dashboard-ticker", daemon=True)
+        self.worker.start()
+
+    def close(self) -> None:
+        self.stop.set()
+        if self.worker is not None:
+            self.worker.join(1.0)
+
+    def capture_health(self, health: dict) -> None:
+        with self.lock:
+            if health.get("dropped_since_report", 0):
+                self.pipe.capture_gap(health["last_drop"]["capture_t"], health.get("dropped_links"))
+            if health.get("idle"):
+                self.pipe.tick(health["capture_wall_t"])
+                if self.monitor:
+                    self.monitor.tick(self.pipe, health["capture_wall_t"])
 
     def process(self, frame: Frame) -> tuple[FrameInfo, Result | None]:
         with self.lock:
-            self.clock.saw(frame.t)
-            self.live_seen[frame.link] = time.monotonic()
+            started = time.perf_counter()
+            age_s = max(0.0, time.time() - frame.t) if self.live else 0.0
+            self.clock.saw(frame.t, age_s)
+            self.live_seen[frame.link] = time.monotonic() - age_s
             info, result = self.pipe.process(frame)
             self._view(lambda: self._show(self.pipe, frame, info, result, sim=False))
+            if self.monitor:
+                self.monitor.observe(self.pipe, frame, (time.perf_counter() - started) * 1000)
             return info, result
 
     def ended(self) -> None:
@@ -376,8 +401,7 @@ class Dashboard:
             self._view(self._flush)
 
     def _run(self) -> None:
-        while True:
-            time.sleep(TICK_S)
+        while not self.stop.wait(TICK_S):
             with self.lock:
                 try:
                     self._tick()
@@ -399,7 +423,9 @@ class Dashboard:
             if self.sim.done:
                 self._sim(None)
         if self.clock.stalled():
-            self.pipe.flow.tick(now)
+            self.pipe.tick(now)
+        if self.monitor:
+            self.monitor.tick(self.pipe, now)
         self.web.notices.overdue(now)
         self._view(lambda: self._state(now))
 
