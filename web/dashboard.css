@@ -862,6 +862,38 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
   letter-spacing: 0.02em;
 }
 
+.care-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid #f3cf6a;
+  background: #fff1c2;
+  color: #7a5200;
+  font-family: "DM Sans", system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.care-flag::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--watch);
+  animation: flag-blink 1.2s ease-in-out infinite;
+}
+
+.care-flag[hidden] {
+  display: none;
+}
+
+@keyframes flag-blink {
+  50% { opacity: 0.3; }
+}
+
 .care-card[data-tone="alert"] .care-pill {
   background: rgba(255, 255, 255, 0.22);
 }

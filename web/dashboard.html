@@ -67,6 +67,7 @@
     <div class="care-gator" id="cg-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 0deg 130deg" camera-orbit="0deg 55deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
     <div class="care-body">
       <span class="care-pill" id="cg-pill">Watching</span>
+      <span class="care-flag" id="cg-flag" hidden></span>
       <h1 class="care-word" id="cg-word">Connecting…</h1>
       <p class="care-sub" id="cg-sub"></p>
       <div class="care-timer" id="cg-timer" hidden>
@@ -894,7 +895,7 @@ function careFor(nowMs) {
   const s = flowState();
   const tl = timeLeft(nowMs);
   if (s === "FALL_CANDIDATE") {
-    return { tone: "watch", mood: "worried", pill: "Checking", word: "Possible fall", sub: "Checking whether it was a fall…", timer: tl, fill: tl ? 1 - tl.left / tl.span : 0 };
+    return { tone: "calm", mood: "happy", pill: "Watching", word: "All is well", sub: "Double-checking a sudden movement. Nothing needed from you yet.", flag: `Potential fall detected · checking${tl ? ` ${tl.secs} s` : "…"}` };
   }
   if (s === "COUNTDOWN") {
     return {
@@ -1028,6 +1029,8 @@ function renderCare(nowMs) {
   card.classList.toggle("asked-help", !!c.help);
   gator($("cg-gator"), c.mood);
   setText($("cg-pill"), c.pill);
+  show($("cg-flag"), !!c.flag);
+  if (c.flag) setText($("cg-flag"), c.flag);
   setText($("cg-word"), c.word);
   setText($("cg-sub"), c.sub);
   show($("cg-timer"), !!c.timer);
