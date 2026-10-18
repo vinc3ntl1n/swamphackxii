@@ -260,6 +260,52 @@ const MOOD_3D = {
   alarmed: { spin: null, orbit: "0deg 72deg auto" },
 };
 const MODEL_COLORS = ["#2f7d4b", "#4caf6e"];
+const DEG = Math.PI / 180;
+const JAW_CLOSED = -7 * DEG;
+const JAW_WIDE = 24 * DEG;
+
+// The upper jaw is its own part in gator_case.glb. model-viewer has no public API for moving one
+// part, so this reaches its three.js scene (internal, pinned by the vendored 4.0.0 build) and
+// turns the jaw around the back of its bottom edge, where the CAD's pegs hold it.
+function findJaw(mv) {
+  const sym = Object.getOwnPropertySymbols(mv).find((s) => s.description === "scene");
+  const scene = sym && mv[sym];
+  const jaw = scene && scene.getObjectByName && scene.getObjectByName("gator_upper_jaw");
+  if (!jaw || !jaw.geometry) return null;
+  jaw.geometry.computeBoundingBox();
+  const box = jaw.geometry.boundingBox;
+  const V = jaw.position.constructor;
+  const Q = jaw.quaternion.constructor;
+  return {
+    scene, jaw, V, Q, angle: 0,
+    hinge: new V(0, box.min.y, box.max.z),
+    p0: jaw.position.clone(),
+    q0: jaw.quaternion.clone(),
+  };
+}
+
+function jawTarget(mood, t) {
+  if (calmMotion.matches) return mood === "alarmed" ? JAW_WIDE : 0;
+  if (mood === "alarmed") return JAW_WIDE + Math.sin(t * 9) * 1.2 * DEG;
+  if (mood === "worried") return Math.sin(t * 2 * Math.PI / 0.7) > 0 ? 9 * DEG : JAW_CLOSED;
+  const phase = t % 4.5;
+  if (phase < 0.25 || (phase > 0.45 && phase < 0.7)) return JAW_CLOSED;
+  return 0;
+}
+
+function moveJaw(mv, t) {
+  const j = mv._jaw;
+  if (!j || mv.hidden) return;
+  const target = jawTarget(mv.dataset.mood || "happy", t);
+  const next = j.angle + (target - j.angle) * 0.28;
+  if (Math.abs(next - j.angle) < 1e-4) return;
+  j.angle = next;
+  const turn = new j.Q().setFromAxisAngle(new j.V(1, 0, 0), j.angle);
+  j.jaw.quaternion.copy(j.q0).multiply(turn);
+  const swing = j.hinge.clone().sub(j.hinge.clone().applyQuaternion(turn)).applyQuaternion(j.q0);
+  j.jaw.position.copy(j.p0).add(swing);
+  j.scene.queueRender();
+}
 const pageStart = performance.now();
 
 function flatGator(box, mood) {
@@ -305,6 +351,11 @@ function gator(host, mood) {
 for (const mv of document.querySelectorAll("model-viewer")) {
   mv.addEventListener("load", () => {
     delete mv.dataset.mood;
+    try {
+      mv._jaw = findJaw(mv);
+    } catch {
+      mv._jaw = null;
+    }
     (mv.model?.materials ?? []).forEach((material, i) => {
       material.pbrMetallicRoughness.setBaseColorFactor(MODEL_COLORS[Math.min(i, MODEL_COLORS.length - 1)]);
     });
@@ -1090,6 +1141,7 @@ function setTab(next) {
 function loop() {
   const nowMs = performance.now();
   drawBg(nowMs);
+  for (const mv of document.querySelectorAll("model-viewer")) moveJaw(mv, nowMs / 1000);
   if (view === "caregiver") {
     renderCare(nowMs);
     const hx = renderTip();
