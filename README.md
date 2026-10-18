@@ -24,8 +24,8 @@ sender XIAO ──┤ Wi-Fi                     ├──► csi.py ► motion.p
 
 Two detectors share the same interface:
 
-- **ThresholdDetector**: hand-tuned rules from `config.py`. The default and the demo fallback.
-- **RandomForestDetector**: scikit-learn model trained on labeled Recordings by `train.py`.
+- **RandomForestDetector**: the default, a saved scikit-learn model trained on labeled Recordings by `train.py`. A missing or incompatible artifact stops startup with setup instructions.
+- **ThresholdDetector**: hand-tuned rules from `config.py`, selected explicitly with `--detector threshold`.
 
 ## Hardware
 
@@ -66,9 +66,13 @@ Before building `csi_recv`, delete the `esp_wifi_set_mac(WIFI_IF_STA, CONFIG_CSI
 ## Running
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+python3.12 -m venv .venv-rf && source .venv-rf/bin/activate
+pip install -r requirements-rf.txt
+# Run the shared baseline included in this branch:
+python -m backend.run --detector rf --model data/experiments/batch-20261017-233929/baseline.joblib
 ```
+
+The shared baseline is tracked in Git at the path above; pulling this branch downloads it without needing R2 or retraining. The shared RF artifacts require scikit-learn 1.6.1 and NumPy 2.1.3. The existing Python 3.14 `.venv` cannot install those NumPy wheels; use the separate Python 3.12 environment above. To load another local artifact, pass `--model /local/path/baseline.joblib` or set `SWAMP_RF_MODEL` in `.env`. Set `SWAMP_DETECTOR=threshold` only when intentionally using the heuristic. Prediction loads the forest once and does not access R2. See [RF runtime setup](docs/random-forest.md).
 
 Run everything from the repo root with `python -m`. Each command finds the receivers by their USB serial numbers in `config.RECEIVERS`, so it doesn't matter which port each one is plugged into. The sender's serial number is in `config.SENDER_BOARD`, so it is skipped if it's on USB for power. If one receiver is missing, the command says so and runs on the other. `--port` (receiver A) and `--port-b` (receiver B) override the lookup.
 
@@ -198,7 +202,15 @@ On top of the record page's messages, `run.py` sends `frame`s with a `"link"` fi
 {"type":"history","t":...,"what":"summary","mode":"live","fall":7,"text":"A possible fall was detected at 2:14 AM. ...","source":"gemini","metrics":{"fall_t":...,"check_in":"sent","answer":"ok","answer_after_s":6,"help_request":false,"alert_after_s":null,"alert":null,"called":false,"outcome":"resident_ok","closed_after_s":6,"links":"A","peak":24.97,"room_change":0.58}}
 ```
 
-`why` is `classified`, `moved_again` (moved during the Stillness Window) or `cut_short` (kept moving for 8 s). `notify` `kind` is `check_in` (to the Resident), `alert`, `all_clear` or `help` (to the Caregiver). `delivery` `status` is `sent`, `failed`, or `not_delivered` when nothing reported back within 10 s. `state` is re-sent every 0.5 s during a Countdown, and a page that connects late gets the latest `state` and `alarm`, plus every `event`, `log`, `notify`, `delivery` and `history` so far. `summary_pending` comes when a fall closes, with the numbers, and the `summary` history entry follows once the text is written. `outcome` is `resident_ok`, `caregiver_cancelled`, `late_answer`, `handled` or `false_alarm`. A delivery status of `pending` means no report had come back when the fall closed. History is replayed from its last 300 entries, plus the last 50 summaries before them.
+`why` is `classified`, `moved_again` (moved during the Stillness Window) or `cut_short` (kept moving for 8 s). RF `event.details` includes all six ordered feature values, `class_probabilities`, and `fall_probability`; confidence is the selected class's model score. These are uncalibrated model scores, not real-world risk estimates. The Dev view shows the saved decision rule and scores rather than applying the heuristic's thresholds to an RF verdict.
+
+The server also sends a sticky `detector` snapshot (`name`, `ready`, `decision_rule`, `fall_threshold`, `trained_at`, `model_path`) and a separate sticky `sensor` snapshot for each receiver every 0.5 s. Sensor snapshots include `health` (`waiting`, `calibrating`, `ready`, `stale`, `invalid`, `ended`), packet counts, packet age, energy, RSSI, rate, and calibration progress/channel counts/baseline. Live startup allows three seconds to step away before collecting ten seconds of still-room calibration. **Dev → Recalibrate sensors** repeats this between events without restarting; its control is disabled during an active fall, simulation, or calibration. `calibration.phase` is `settling`, `learning`, or `ready`, with `settle_remaining_s` during the step-away interval. Movement during calibration raises the denominator used for motion energy and can make subsequent falls appear too weak; recalibrate after changing the room or moving the boards.
+
+After two seconds without usable live frames, the pipeline discards affected unfinished candidates and requires ten seconds of fresh calibration when that receiver returns. Signal loss never means stillness, and a confirmed countdown continues. Replays preserve their recorded calibration. Simulation frames carry `sim: true` and never mark real sensors connected. The bundled early example may receive a non-fall RF verdict; `--sim-fall <local-recording.log.gz>` chooses another demonstration input, using the same forest and decision rule.
+
+`notify` `kind` is `check_in` (to the Resident), `alert`, `all_clear` or `help` (to the Caregiver). `delivery` `status` is `sent`, `failed`, or `not_delivered` when nothing reported back within 10 s. `state` is re-sent every 0.5 s during a Countdown, and a page that connects late gets the latest `state`, `alarm`, `detector`, and per-link `sensor`, plus every `event`, `log`, `notify`, `delivery` and `history` so far.
+
+`summary_pending` comes when a fall closes, with the numbers, and the `summary` history entry follows once the text is written. `outcome` is `resident_ok`, `caregiver_cancelled`, `late_answer`, `handled` or `false_alarm`. A delivery status of `pending` means no report had come back when the fall closed. History is replayed from its last 300 entries, plus the last 50 summaries before them.
 
 Pages and the messaging sidecar send commands back over the same `/ws`:
 

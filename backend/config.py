@@ -19,7 +19,10 @@ QUIET_S = 1.0
 PRE_EVENT_S = 1.5
 MAX_EVENT_S = 8.0
 
-DETECTOR = "threshold"
+# Live detection uses the saved event classifier. Select the heuristic explicitly
+# with --detector threshold (or SWAMP_DETECTOR=threshold) when testing without it.
+DETECTOR = "rf"
+MODEL_PATH = DATA_DIR / "model.joblib"
 
 STILLNESS_S = 4.0
 AFTER_S = 1.5

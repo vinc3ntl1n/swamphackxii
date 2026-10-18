@@ -90,6 +90,83 @@ button.chip:disabled {
   gap: 8px;
 }
 
+.sensor-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.sensor-controls .btn {
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+.sensor-controls-note {
+  flex: 1 1 180px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sensor-controls-note.error {
+  color: var(--critical);
+}
+
+.sensor-chip {
+  display: flex;
+  flex: 1 1 180px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 12px;
+}
+
+.sensor-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sensor-energy {
+  margin-left: auto;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sensor-detail {
+  font-size: 11px;
+  white-space: normal;
+  opacity: 0.8;
+}
+
+.sensor-chip[data-health="stale"] .dot,
+.sensor-chip[data-health="invalid"] .dot {
+  background: var(--critical);
+}
+
+.sensor-chip[data-health="warming"] .dot {
+  background: var(--candidate);
+}
+
+.sensor-progress {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--grid);
+}
+
+.sensor-progress[hidden] {
+  display: none;
+}
+
+.sensor-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--series);
+}
+
 .actions-note {
   align-self: center;
   color: var(--muted);
@@ -476,6 +553,47 @@ a.btn {
   line-height: 1.35;
 }
 
+.score-row .why-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.score-row .bar {
+  height: 8px;
+}
+
+.score-row[data-selected="true"] .bar-fill {
+  background: var(--series);
+}
+
+.score-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.feature-values {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 12px;
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--grid);
+  font-size: 12px;
+}
+
+.feature-values dt {
+  color: var(--ink-2);
+}
+
+.feature-values dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 .card.wave {
   flex: 2.6 1 0;
 }
@@ -597,6 +715,10 @@ a.btn {
 
   .card.room {
     height: 260px;
+  }
+
+  .card.why {
+    max-height: min(440px, 65vh);
   }
 
   .card.wave {
@@ -849,7 +971,7 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  max-width: 560px;
+  max-width: min(560px, 100%);
 }
 
 .care-pill {
@@ -900,9 +1022,12 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
 
 .care-word {
   margin: 0;
+  max-width: 100%;
   font-size: clamp(30px, min(6.5vh, 6vw), 64px);
   font-weight: 900;
   line-height: 1.08;
+  /* Always one line; fitLine() in dashboard.html shrinks the font when a long name would overflow. */
+  white-space: nowrap;
 }
 
 .care-sub {
