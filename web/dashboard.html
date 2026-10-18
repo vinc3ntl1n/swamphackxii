@@ -45,6 +45,7 @@
 <header class="topbar">
   <span class="brand"><span class="brand-gator" data-gator="happy"></span>Fall Watch</span>
   <div class="toggle views" role="group" aria-label="View">
+    <span class="views-thumb" aria-hidden="true"></span>
     <button type="button" data-view="caregiver">Caregiver</button>
     <button type="button" data-view="resident">Resident</button>
     <button type="button" data-view="dev">Dev</button>
@@ -55,7 +56,7 @@
 
 <main class="care" id="caregiver">
   <section class="care-card glass" id="cg-card" data-tone="calm" role="status" aria-live="polite">
-    <div class="care-gator" id="cg-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" camera-orbit="35deg 66deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
+    <div class="care-gator" id="cg-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 45deg 130deg" camera-orbit="0deg 72deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
     <div class="care-body">
       <span class="care-pill" id="cg-pill">Watching</span>
       <h1 class="care-word" id="cg-word">Connecting…</h1>
@@ -90,7 +91,7 @@
 
 <main class="resident" id="resident" hidden>
   <div class="resident-card glass" id="resident-card" data-tone="calm" role="status" aria-live="assertive">
-    <div class="resident-gator" id="res-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" camera-orbit="35deg 66deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
+    <div class="resident-gator" id="res-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" orientation="0deg 45deg 130deg" camera-orbit="0deg 72deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
     <div class="resident-word" id="resident-word">All good</div>
     <div class="resident-sub" id="resident-sub">Fall Watch is on</div>
     <div class="resident-buttons" id="resident-buttons" hidden>
@@ -248,7 +249,7 @@ function fresh() {
 const MOOD_3D = {
   happy: { spin: "24deg" },
   worried: { spin: "70deg" },
-  alarmed: { spin: null, orbit: "150deg 66deg auto" },
+  alarmed: { spin: null, orbit: "0deg 72deg auto" },
 };
 const MODEL_COLORS = ["#2f7d4b", "#4caf6e"];
 const pageStart = performance.now();
@@ -1041,10 +1042,19 @@ function setView(next) {
   theme = readTheme();
   soft = readTheme($("caregiver"));
   for (const b of document.querySelectorAll(".views button")) b.setAttribute("aria-pressed", String(b.dataset.view === view));
+  placeThumb();
   const url = new URL(location.href);
   if (view === "caregiver") url.searchParams.delete("view");
   else url.searchParams.set("view", view);
   history.replaceState(null, "", url);
+}
+
+function placeThumb() {
+  const on = document.querySelector(`.views button[data-view="${view}"]`);
+  const thumb = document.querySelector(".views-thumb");
+  if (!on || !thumb) return;
+  thumb.style.width = `${on.offsetWidth}px`;
+  thumb.style.transform = `translateX(${on.offsetLeft}px)`;
 }
 
 function setTab(next) {
@@ -1129,6 +1139,8 @@ watchTheme(() => {
   theme = readTheme();
   soft = readTheme($("caregiver"));
 });
+addEventListener("resize", placeThumb);
+document.fonts?.ready.then(placeThumb);
 setView(view);
 setTab(tab);
 renderWhy();
