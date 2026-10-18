@@ -14,8 +14,6 @@
   }
 }
 </script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;800;900&display=swap">
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="dashboard.css">
 <script type="module" src="vendor/model-viewer.min.js"></script>
@@ -53,7 +51,7 @@
 </template>
 
 <header class="topbar">
-  <span class="brand"><span class="brand-gator" data-gator="happy"></span>Fall Watch</span>
+  <span class="brand"><img class="brand-logo" src="gator_side.png" alt="">Fall Watch</span>
   <div class="toggle views" role="group" aria-label="View">
     <span class="views-thumb" aria-hidden="true"></span>
     <button type="button" data-view="caregiver">Caregiver</button>
@@ -316,7 +314,7 @@ for (const mv of document.querySelectorAll("model-viewer")) {
 
 const bg = $("bg");
 const bgCtx = bg.getContext("2d");
-const DOT_COLORS = ["31,138,76", "76,175,110", "42,120,214", "110,196,160", "229,154,26"];
+const DOT_COLORS = ["18,84,46", "31,122,67", "47,125,75", "76,175,110", "112,196,140", "160,214,170"];
 const calmMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 const dots = [];
 const pointer = { x: 0, y: 0, tx: 0, ty: 0, px: -1e4, py: -1e4 };
@@ -327,7 +325,7 @@ function seedDots() {
   for (let i = 0; i < n; i++) {
     dots.push({
       x: Math.random() * 2 - 1, y: Math.random() * 2 - 1, z: Math.random() * 2 - 1,
-      c: DOT_COLORS[i % 5 === 4 && Math.random() < 0.5 ? 4 : i % 4], s: 0.6 + Math.random() * 0.9,
+      c: DOT_COLORS[i % DOT_COLORS.length], s: 0.6 + Math.random() * 0.9,
       phase: Math.random() * Math.PI * 2,
     });
   }
@@ -788,6 +786,7 @@ function careFor(nowMs) {
       ? { tone: "offline", mood: "worried", pill: "Offline", word: "We lost the connection", sub: "Trying to reconnect…" }
       : { tone: "calm", mood: "happy", pill: "Starting", word: "Connecting…", sub: "" };
   }
+  if (!st.state) return { tone: "calm", mood: "happy", pill: "Starting", word: "Connecting…", sub: "" };
   const s = flowState();
   const tl = timeLeft(nowMs);
   if (s === "FALL_CANDIDATE") {
@@ -1081,7 +1080,6 @@ function setTab(next) {
 function loop() {
   const nowMs = performance.now();
   drawBg(nowMs);
-  gator(document.querySelector(".brand-gator"), "happy");
   if (view === "caregiver") {
     renderCare(nowMs);
     const hx = renderTip();
