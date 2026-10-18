@@ -8,8 +8,10 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;800;900&display=swap">
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="dashboard.css">
+<script type="module" src="vendor/model-viewer.min.js"></script>
 </head>
 <body class="friendly-page">
+<canvas class="bg-dots" id="bg" aria-hidden="true"></canvas>
 <template id="gator-tpl">
   <svg class="gator" viewBox="0 0 240 150" data-mood="happy" aria-hidden="true">
     <ellipse class="g-shadow" cx="122" cy="141" rx="104" ry="6"></ellipse>
@@ -52,8 +54,8 @@
 </header>
 
 <main class="care" id="caregiver">
-  <section class="care-card" id="cg-card" data-tone="calm" role="status" aria-live="polite">
-    <div class="care-gator" data-gator="happy" id="cg-gator"></div>
+  <section class="care-card glass" id="cg-card" data-tone="calm" role="status" aria-live="polite">
+    <div class="care-gator" id="cg-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" camera-orbit="35deg 66deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
     <div class="care-body">
       <span class="care-pill" id="cg-pill">Watching</span>
       <h1 class="care-word" id="cg-word">Connecting…</h1>
@@ -74,11 +76,11 @@
     </div>
   </section>
   <section class="care-side">
-    <figure class="soft-card movement">
+    <figure class="soft-card glass movement">
       <header><h2>Movement in the room</h2><span class="soft-note" id="cg-move-note">last 20 seconds</span></header>
       <div class="plot"><canvas id="cg-energy" role="img" aria-label="Average movement in the room over the last 20 seconds"></canvas></div>
     </figure>
-    <figure class="soft-card activity">
+    <figure class="soft-card glass activity">
       <header><h2>Recent activity</h2></header>
       <ol class="activity-list" id="cg-activity"></ol>
       <p class="activity-empty" id="cg-empty">Nothing has happened yet. That's a good thing.</p>
@@ -87,8 +89,8 @@
 </main>
 
 <main class="resident" id="resident" hidden>
-  <div class="resident-card" id="resident-card" data-tone="calm" role="status" aria-live="assertive">
-    <div class="resident-gator" data-gator="happy" id="res-gator"></div>
+  <div class="resident-card glass" id="resident-card" data-tone="calm" role="status" aria-live="assertive">
+    <div class="resident-gator" id="res-gator"><model-viewer class="gator3d" src="/models/gator_case.glb" alt="Gator sensor case" auto-rotate auto-rotate-delay="1500" rotation-per-second="24deg" camera-controls disable-zoom disable-pan interaction-prompt="none" camera-orbit="35deg 66deg auto" shadow-intensity="0.7" shadow-softness="0.9" exposure="1.05" environment-image="neutral"></model-viewer><div class="gator2d" hidden></div></div>
     <div class="resident-word" id="resident-word">All good</div>
     <div class="resident-sub" id="resident-sub">Fall Watch is on</div>
     <div class="resident-buttons" id="resident-buttons" hidden>
@@ -243,11 +245,135 @@ function fresh() {
   };
 }
 
-function gator(host, mood) {
-  if (!host.firstElementChild) host.append($("gator-tpl").content.firstElementChild.cloneNode(true));
-  const svg = host.firstElementChild;
+const MOOD_3D = {
+  happy: { spin: "24deg" },
+  worried: { spin: "70deg" },
+  alarmed: { spin: null, orbit: "150deg 66deg auto" },
+};
+const MODEL_COLORS = ["#2f7d4b", "#4caf6e"];
+const pageStart = performance.now();
+
+function flatGator(box, mood) {
+  if (!box.firstElementChild) box.append($("gator-tpl").content.firstElementChild.cloneNode(true));
+  const svg = box.firstElementChild;
   if (svg.dataset.mood !== mood) svg.dataset.mood = mood;
 }
+
+function setModel(mv, mood) {
+  if (!mv.loaded || mv.dataset.mood === mood) return;
+  mv.dataset.mood = mood;
+  const m = MOOD_3D[mood];
+  if (m.spin) {
+    mv.rotationPerSecond = m.spin;
+    mv.autoRotate = true;
+  } else {
+    mv.autoRotate = false;
+    mv.cameraOrbit = m.orbit;
+  }
+}
+
+function gator(host, mood) {
+  if (host.dataset.mood !== mood) host.dataset.mood = mood;
+  const mv = host.querySelector("model-viewer");
+  const flat = host.querySelector(".gator2d");
+  if (!mv) {
+    flatGator(host, mood);
+    return;
+  }
+  const defined = !!customElements.get("model-viewer");
+  if (defined && !mv.dataset.failed) {
+    show(mv, true);
+    show(flat, false);
+    setModel(mv, mood);
+    return;
+  }
+  const waiting = !mv.dataset.failed && performance.now() - pageStart < 4000;
+  show(mv, false);
+  show(flat, !waiting);
+  if (!waiting) flatGator(flat, mood);
+}
+
+for (const mv of document.querySelectorAll("model-viewer")) {
+  mv.addEventListener("load", () => {
+    delete mv.dataset.mood;
+    (mv.model?.materials ?? []).forEach((material, i) => {
+      material.pbrMetallicRoughness.setBaseColorFactor(MODEL_COLORS[Math.min(i, MODEL_COLORS.length - 1)]);
+    });
+  });
+  mv.addEventListener("error", () => (mv.dataset.failed = "1"));
+}
+
+const bg = $("bg");
+const bgCtx = bg.getContext("2d");
+const DOT_COLORS = ["31,138,76", "76,175,110", "42,120,214", "110,196,160", "229,154,26"];
+const calmMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const dots = [];
+const pointer = { x: 0, y: 0, tx: 0, ty: 0, px: -1e4, py: -1e4 };
+
+function seedDots() {
+  dots.length = 0;
+  const n = Math.min(460, Math.round((innerWidth * innerHeight) / 3600));
+  for (let i = 0; i < n; i++) {
+    dots.push({
+      x: Math.random() * 2 - 1, y: Math.random() * 2 - 1, z: Math.random() * 2 - 1,
+      c: DOT_COLORS[i % 5 === 4 && Math.random() < 0.5 ? 4 : i % 4], s: 0.6 + Math.random() * 0.9,
+      phase: Math.random() * Math.PI * 2,
+    });
+  }
+}
+
+function drawBg(nowMs) {
+  if (view === "dev" || document.hidden) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = innerWidth;
+  const h = innerHeight;
+  if (bg.width !== Math.round(w * dpr) || bg.height !== Math.round(h * dpr)) {
+    bg.width = Math.round(w * dpr);
+    bg.height = Math.round(h * dpr);
+    seedDots();
+  }
+  bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  bgCtx.clearRect(0, 0, w, h);
+  const t = calmMotion.matches ? 0 : nowMs / 1000;
+  pointer.x += (pointer.tx - pointer.x) * 0.04;
+  pointer.y += (pointer.ty - pointer.y) * 0.04;
+  const yaw = t * 0.035 + pointer.x * 0.35;
+  const pitch = -0.18 + pointer.y * 0.18;
+  const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+  for (const d of dots) {
+    const bob = calmMotion.matches ? 0 : Math.sin(t * 0.6 + d.phase) * 0.02;
+    const x1 = d.x * cy - d.z * sy;
+    const z1 = d.x * sy + d.z * cy;
+    const y1 = (d.y + bob) * cp - z1 * sp;
+    const z2 = (d.y + bob) * sp + z1 * cp;
+    const persp = 1.6 / (z2 + 2.6);
+    let px = w / 2 + x1 * persp * w * 0.95;
+    let py = h / 2 + y1 * persp * h * 1.05;
+    const dx = px - pointer.px;
+    const dy = py - pointer.py;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 130 && dist > 0.1) {
+      const push = (130 - dist) * 0.45;
+      px += (dx / dist) * push;
+      py += (dy / dist) * push;
+    }
+    const alpha = Math.min(0.9, Math.max(0.2, (persp - 0.3) * 1.4));
+    bgCtx.fillStyle = `rgba(${d.c},${alpha.toFixed(3)})`;
+    bgCtx.beginPath();
+    bgCtx.arc(px, py, d.s * persp * 3.6, 0, Math.PI * 2);
+    bgCtx.fill();
+  }
+}
+
+addEventListener("pointermove", (e) => {
+  pointer.tx = (e.clientX / innerWidth) * 2 - 1;
+  pointer.ty = (e.clientY / innerHeight) * 2 - 1;
+  pointer.px = e.clientX;
+  pointer.py = e.clientY;
+});
+document.addEventListener("pointerleave", () => {
+  pointer.px = pointer.py = -1e4;
+});
 
 function linkFor(name) {
   let l = links.get(name);
@@ -934,6 +1060,7 @@ function setTab(next) {
 
 function loop() {
   const nowMs = performance.now();
+  drawBg(nowMs);
   gator(document.querySelector(".brand-gator"), "happy");
   if (view === "caregiver") {
     renderCare(nowMs);
