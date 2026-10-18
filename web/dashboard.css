@@ -1685,3 +1685,43 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
   color: #ffffff;
   border-color: transparent;
 }
+
+/* Dev view: same light green background and liquid glass, no dots. The light values
+   for every token the dev charts read, so dark mode doesn't leak in behind the glass. */
+
+body.friendly-page {
+  --hold: #0b0b0b;
+  --on-hold: #fcfcfb;
+  --count: #dfe9e1;
+  --strip-position: #e1e0d9;
+  --strip-count: #c3c2b7;
+  --strip-hold: #52514e;
+  --on-strip-hold: #fcfcfb;
+  --heat-seq:
+    #cde2fb #b7d3f6 #9ec5f4 #86b6ef #6da7ec #5598e7 #3987e5
+    #2a78d6 #256abf #1c5cab #184f95 #104281 #0d366b;
+  --heat-mid: #f0efec;
+  --heat-neg: #f2b8b5 #e34948 #9e1f1f;
+  --heat-pos: #b7d3f6 #86b6ef #2a78d6;
+}
+
+body[data-view="dev"] .bg-dots {
+  display: none;
+}
+
+.card.glass-card {
+  --glass-tint: rgba(255, 255, 255, 0.42);
+}
+
+.status.glass-card {
+  --glass-tint: color-mix(in srgb, var(--tone-bg) 82%, transparent);
+}
+
+.status.glass-card[data-tone="idle"] {
+  --glass-tint: rgba(255, 255, 255, 0.42);
+}
+
+#dev .card,
+#dev .status {
+  border-color: rgba(255, 255, 255, 0.55);
+}
