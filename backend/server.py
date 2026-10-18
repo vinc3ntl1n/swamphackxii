@@ -180,6 +180,16 @@ def make_app(hub: Hub, on_command: Commands | None = None) -> FastAPI:
     async def dashboard() -> FileResponse:
         return FileResponse(WEB / "dashboard.html")
 
+    @app.post("/calibrate")
+    async def calibrate(request: Request) -> Response:
+        port = request.scope["server"][1]
+        if request.headers.get("host") not in (f"127.0.0.1:{port}", f"localhost:{port}"):
+            return Response(status_code=403)
+        if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+            return Response(status_code=415)
+        action = hub.actions.get("calibrate")
+        return Response(status_code=202 if action is not None and action() else 409)
+
     @app.websocket("/ws")
     async def ws(client: WebSocket) -> None:
         await client.accept()
