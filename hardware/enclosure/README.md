@@ -44,9 +44,9 @@ as they load:
 
 | Part | Orientation | Notes |
 |---|---|---|
-| `gator_base.stl` | floor down | legs, tail, lower jaw and teeth; about 89 × 223 mm, so place it diagonally on smaller beds |
-| `gator_lid.stl` | flat side down | scutes and eyes face up |
-| `gator_upper_jaw.stl` | flat top down | teeth point up while printing |
+| `gator_base.stl` | floor down | legs, tail, lower jaw and teeth; 94 × 226 × 28 mm, so place it diagonally on smaller beds |
+| `gator_lid.stl` | flat side down | 68 × 97 × 9 mm; scutes and eyes face up |
+| `gator_upper_jaw.stl` | flat top down | 48 × 50 × 16 mm; teeth point up while printing |
 
 PLA, 0.2 mm layers and 15% infill work fine. The only overhangs are bridges
 under 2 mm wide.
@@ -55,7 +55,8 @@ under 2 mm wide.
 
 ## Assembly
 
-1. Press the breadboard into the base, with the USB-C end toward the tail.
+1. Press the breadboard into the base, with the USB-C end toward the tail and pushed
+   against the tail wall. Its adhesive backing can hold it in place.
 2. Plug in the USB-C cable. The plug and LED drop into the pocket at the tail
    root, and the cable lies in the channel down the tail.
 3. Route the antenna through the throat slot and out of the mouth. Keep metal
@@ -65,8 +66,10 @@ under 2 mm wide.
 
 ## Changing the size
 
-The fit assumes a **55 × 83 × 9.5 mm** breadboard and a USB-C plug body no
-wider than 22 mm. If yours differ, edit the values at the top of
+The pocket is **62.7 × 92.1 mm** inside, sized for our breadboard (about
+59 × 85 mm with the power rails attached; up to 10 mm tall). The extra length is
+room for the antenna cable at the head end, so push the board back against the
+tail end. The USB-C plug body must be no wider than 22 mm. If yours differ, edit the values at the top of
 `cad/gator_case.py` and regenerate:
 
 ```bash
