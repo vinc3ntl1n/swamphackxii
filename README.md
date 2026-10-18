@@ -82,10 +82,31 @@ Run everything from the repo root with `python -m`. Each command finds the recei
 | `python -m backend.training.calibrate` | Learn the empty room again for every receiver that sends packets, save it to `data/calibration.json` and exit. After the announcement there are 3 s to leave, then everyone stays out of the area and nobody moves for 10 s; if something moved, it tries again. Shows the live page and speaks like `record.py` (`--no-view`, `--view-port`, `--no-voice`). |
 | `python -m backend.training.train` | Train the random forest on `data/recordings/train/`, score it on `data/recordings/test/` (or cross-validation if there's no test set), write `data/model.joblib` and `data/results.json`. |
 | `python -m backend.run --detector rf` | Use the trained model instead of the threshold rules. |
+| `python -m backend.sync push` / `pull` | Upload `data/` to the R2 bucket, or download it (see Data storage above). |
 
 All tunable numbers (thresholds, timings) are in `backend/config.py`. Phone numbers stay out of git, in `.env` (see the dashboard section below).
 
 Session logs and Recordings store one packet per line: `<laptop time>\t<link>\t<CSI_DATA line>`. Files from before the second receiver have no link column and read as link A, so the old Recordings still train as before. A Recording's `.json` keeps one calibration per link, and its `rate_hz` gives packets per second per link. `calibration.json` also keeps one calibration per link. `record.py` recalibrates when a receiver has none saved yet.
+
+### Data storage
+
+Nothing in `data/` is in git, so the public repo never contains training data. Recordings, `calibration.json`, `results.json` and `model.joblib` live in the private Cloudflare R2 bucket `swamphacksdata` (`config.R2_BUCKET`), and each laptop keeps a copy in `data/`. Session logs in `data/sessions/` stay on the laptop that made them.
+
+To set up a laptop, get the R2 keys from a teammate privately (or make your own R2 API token with Object Read & Write on the bucket) and put them in a `.env` file in the repo root. `.env` is in `.gitignore`; never commit the keys or post them anywhere public.
+
+```
+R2_ENDPOINT=https://<account id>.r2.cloudflarestorage.com
+R2_ACCESS_KEY_ID=...
+R2_SECRET_ACCESS_KEY=...
+```
+
+Then download the data with `python -m backend.sync pull`. Day to day:
+
+1. `python -m backend.sync pull` before you start, to get what others recorded.
+2. Record, calibrate or train as usual. Everything is saved to `data/` first.
+3. `python -m backend.sync push` when you're done, so the bucket has it.
+
+Both commands compare each file's MD5 with the bucket and only copy files that are missing or different. A pull overwrites a local `calibration.json` or `model.joblib` that wasn't pushed yet, so push before you pull if you recalibrated or retrained. Nothing is ever deleted: to drop a bad Recording, delete it locally and in the R2 dashboard.
 
 ### The live record page
 
@@ -193,6 +214,7 @@ backend/
   config.py            all tunable numbers and the data folder location
   run.py               terminal front end for the pipeline (and the dashboard with --view)
   server.py            live page server: WebSocket hub, 20 Hz signal feed, static files
+  sync.py              copy data/ to and from the R2 bucket
   dashboard.py         dashboard glue: WebSink, commands, history, Simulate fall
   capture/             getting CSI from the board into Frames
     csi.py             parse CSI lines, read logs
@@ -218,12 +240,12 @@ web/
   style.css            colors (light and dark) and layout
 arduino/
   cancel_button/       cancel button + buzzer sketch
-data/
+data/                  not in git; kept in R2 with sync.py
   recordings/          labeled clips (.log.gz + .json metadata), train/ and test/
   calibration.json     empty-room baseline used by record.py, written by record.py and calibrate.py
   results.json         latest training scores
-  sessions/            raw logs of every live run (not in git)
-  model.joblib         trained model (not in git, rebuild with train.py)
+  sessions/            raw logs of every live run (local only, not synced)
+  model.joblib         trained model
 ```
 
 ## Status
