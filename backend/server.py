@@ -23,13 +23,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.detection.motion import FrameInfo
 
 WEB = Path(__file__).resolve().parent.parent / "web"
+MODELS = WEB.parent / "hardware" / "enclosure" / "web"
 HOST = "127.0.0.1"
-STICKY = ("source", "config", "session")
-KEPT = ("record",)
+STICKY = ("source", "config", "session", "state", "alarm")
+KEPT = ("record", "event", "log", "notify", "delivery", "history")
 KEPT_MAX = 2000
 BACKLOG_S = 60.0
 QUEUE_SIZE = 256
 STEP_S = 0.05
+LIVE = json.dumps({"type": "live"})  # sent after the catch-up snapshot, so clients can tell old from new
 HZ_S = 2.0
 
 
@@ -101,8 +103,9 @@ class Hub:
 
 
 class SignalFeed:
-    def __init__(self, hub: Hub) -> None:
+    def __init__(self, hub: Hub, link: str | None = None) -> None:
         self.hub = hub
+        self.link = link
         self.slot: int | None = None
         self.sum: np.ndarray | None = None
         self.count = 0
@@ -140,19 +143,35 @@ class SignalFeed:
         span = self.times[-1] - self.times[0]
         hz = round((len(self.times) - 1) / span, 1) if span >= 0.5 else None
         self.count = 0
-        self.hub.publish({
+        msg = {
             "type": "frame", "t": self.t,
             "energy": None if self.energy is None else round(self.energy, 2),
             "level": self.level, "row": values, "rssi": self.rssi, "hz": hz,
-        })
+        }
+        if self.link is not None:
+            msg["link"] = self.link
+        self.hub.publish(msg)
 
 
 async def _send(client: WebSocket, queue: asyncio.Queue[str], snapshot: list[str]) -> None:
     with contextlib.suppress(WebSocketDisconnect):
         for text in snapshot:
             await client.send_text(text)
+        await client.send_text(LIVE)
         while True:
             await client.send_text(await queue.get())
+
+
+Commands = Callable[[dict], None]
+
+
+def _command(on_command: Commands | None, text: str | None) -> None:
+    if on_command is None or not text:
+        return
+    with contextlib.suppress(ValueError):
+        msg = json.loads(text)
+        if isinstance(msg, dict):
+            on_command(msg)
 
 
 class RecordingRequest(BaseModel):
@@ -175,7 +194,7 @@ def action_allowed(request: Request) -> Response | None:
     return None
 
 
-def make_app(hub: Hub) -> FastAPI:
+def make_app(hub: Hub, on_command: Commands | None = None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware("http")
@@ -187,6 +206,10 @@ def make_app(hub: Hub) -> FastAPI:
     @app.get("/")
     async def index() -> FileResponse:
         return FileResponse(WEB / "record.html")
+
+    @app.get("/dashboard")
+    async def dashboard() -> FileResponse:
+        return FileResponse(WEB / "dashboard.html")
 
     @app.post("/calibrate")
     async def calibrate(request: Request) -> Response:
@@ -218,12 +241,14 @@ def make_app(hub: Hub) -> FastAPI:
         queue, snapshot = hub.join()
         sender = asyncio.create_task(_send(client, queue, snapshot))
         try:
-            while (await client.receive())["type"] != "websocket.disconnect":
-                pass
+            while (msg := await client.receive())["type"] != "websocket.disconnect":
+                _command(on_command, msg.get("text"))
         finally:
             sender.cancel()
             hub.leave(queue)
 
+    if MODELS.is_dir():
+        app.mount("/models", StaticFiles(directory=MODELS), name="models")
     app.mount("/", StaticFiles(directory=WEB), name="web")
     return app
 
@@ -234,7 +259,7 @@ def _taken(port: int) -> bool:
     return False
 
 
-def serve(hub: Hub, port: int) -> str | None:
+def serve(hub: Hub, port: int, on_command: Commands | None = None) -> str | None:
     if port and _taken(port):
         return None
     sock = socket.socket()
@@ -246,7 +271,7 @@ def serve(hub: Hub, port: int) -> str | None:
         sock.close()
         return None
     url = f"http://{HOST}:{sock.getsockname()[1]}/"
-    server = uvicorn.Server(uvicorn.Config(make_app(hub), log_level="warning", lifespan="off"))
+    server = uvicorn.Server(uvicorn.Config(make_app(hub, on_command), log_level="warning", lifespan="off"))
     thread = threading.Thread(target=server.run, args=([sock],), name="view-server", daemon=True)
     thread.start()
     while not server.started and thread.is_alive():

@@ -117,4 +117,14 @@ process to load a replacement. To try an experiment without replacing the defaul
 python -m backend.run --detector rf --model data/experiments/threshold-035.joblib
 ```
 
+The live command opens the dashboard by default. Use `--no-view` for terminal
+output only, or `--view-port 8001` if the recording dashboard is using port 8000.
+The selected artifact is used in both modes and by the dashboard's simulation.
+Keep the room still during the initial live calibration; recording metadata is
+automatically preloaded only for replay inputs.
+
+The dashboard's recording replay adds a synthetic tail so its stillness window
+can finish. This is a demo playback behavior, not additional measured evidence.
+Training validation and the raw-clip experiments do not add that synthetic data.
+
 Only load trusted local joblib artifacts.
