@@ -383,7 +383,7 @@ const pointer = { x: 0, y: 0, tx: 0, ty: 0, px: -1e4, py: -1e4 };
 
 function seedDots() {
   dots.length = 0;
-  const n = Math.min(460, Math.round((innerWidth * innerHeight) / 3600));
+  const n = Math.min(300, Math.round((innerWidth * innerHeight) / 5200));
   for (let i = 0; i < n; i++) {
     dots.push({
       x: Math.random() * 2 - 1, y: Math.random() * 2 - 1, z: Math.random() * 2 - 1,
@@ -408,7 +408,7 @@ function drawBg(nowMs) {
   const t = calmMotion.matches ? 0 : nowMs / 1000;
   pointer.x += (pointer.tx - pointer.x) * 0.04;
   pointer.y += (pointer.ty - pointer.y) * 0.04;
-  const yaw = t * 0.035 + pointer.x * 0.35;
+  const yaw = t * 0.02 + pointer.x * 0.3;
   const pitch = -0.18 + pointer.y * 0.18;
   const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
   for (const d of dots) {
@@ -435,10 +435,10 @@ function drawBg(nowMs) {
     d.oy += (ty - d.oy) * AVOID_EASE;
     const px = bx + d.ox;
     const py = by + d.oy;
-    const alpha = Math.min(0.9, Math.max(0.2, (persp - 0.3) * 1.4));
+    const alpha = Math.min(0.5, Math.max(0.1, (persp - 0.3) * 0.8));
     bgCtx.fillStyle = `rgba(${d.c},${alpha.toFixed(3)})`;
     bgCtx.beginPath();
-    bgCtx.arc(px, py, d.s * persp * 3.6, 0, Math.PI * 2);
+    bgCtx.arc(px, py, d.s * persp * 2, 0, Math.PI * 2);
     bgCtx.fill();
   }
 }
