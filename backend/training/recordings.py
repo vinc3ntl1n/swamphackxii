@@ -48,7 +48,7 @@ class Recording:
                     continue
                 info, event = tracker.update(frame)
                 events, ts, es, amps = rows[frame.link]
-                if info.amp is not None:
+                if info.amp is not None and info.energy is not None:
                     ts.append(info.t)
                     es.append(info.energy)
                     amps.append(info.amp)

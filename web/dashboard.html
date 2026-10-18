@@ -59,6 +59,7 @@
     <button type="button" data-view="resident">Resident</button>
     <button type="button" data-view="dev">Dev</button>
   </div>
+  <span class="chip" id="monitor-mode">Connecting…</span>
   <button type="button" class="chip simulate" id="simulate" disabled>Simulate fall</button>
   <button type="button" class="chip sound" id="sound"></button>
 </header>
@@ -126,6 +127,10 @@
       <div class="progress"><div class="progress-fill" id="status-progress"></div></div>
     </div>
     <div class="motion" id="motion" aria-label="Motion Level per Link"></div>
+    <div class="sensor-controls">
+      <button type="button" class="btn" id="recalibrate" aria-describedby="recalibrate-note" disabled>Recalibrate sensors</button>
+      <span class="sensor-controls-note" id="recalibrate-note" role="status" aria-live="polite">Keep the room still for 10 seconds</span>
+    </div>
     <div class="actions">
       <button type="button" class="btn primary" id="cancel" hidden>Cancel Countdown</button>
       <button type="button" class="btn primary" id="resolve-handled" hidden>Resolve: handled</button>
@@ -155,7 +160,7 @@
         </div>
       </figure>
       <figure class="card glass-card why">
-        <header><h2 id="why-title">Why it's a fall</h2></header>
+        <header><h2 id="why-title">Detector verdict</h2></header>
         <div class="why-body" id="why"></div>
       </figure>
     </div>
@@ -163,6 +168,7 @@
   <section class="dash-right" aria-label="Live signal and history">
     <div class="chips" id="chips">
       <span class="chip" id="dev-source">–</span>
+      <span class="chip" id="dev-detector">Detector connecting…</span>
       <span class="chip alert" id="stale" hidden></span>
     </div>
     <figure class="card glass-card wave">
@@ -209,6 +215,13 @@ const STALE_MS = 2000;
 const MAX_ROWS = 200;
 const BEEP_MS = 700;
 const LABELS = { fall: "FALL", walk: "walk", "sit-down": "sit-down" };
+const FEATURES = [
+  ["peak", "Peak energy", "×"], ["static_change", "Static change", ""],
+  ["duration_s", "Duration", " s"], ["mean_energy", "Mean energy", "×"],
+  ["time_to_peak_s", "Time to peak", " s"], ["stop_s", "Peak to stop", " s"],
+];
+const HEALTH = { waiting: "waiting for packets", calibrating: "calibrating", warming: "warming signal", ready: "ready", stale: "signal lost", invalid: "invalid frames", ended: "replay ended" };
+const MAP_HEALTH = { waiting: "waiting", calibrating: "calibrating", warming: "warming", ready: "ready", stale: "offline", invalid: "invalid", ended: "ended" };
 const LOG_TEXT = { "Fall Candidate: stay still, deciding...": "Fall suspected: checking for movement…" };
 const NOTICE = {
   check_in: "Check-in to the Resident", alert: "Alert to the Caregiver",
@@ -276,8 +289,9 @@ try {
 
 function fresh() {
   return {
-    cfg: null, source: null, ended: false, state: null, stateAt: 0, alarm: false,
+    cfg: null, detector: null, source: null, ended: false, state: null, stateAt: 0, alarm: false,
     events: [], lastFall: null, lastVerdict: null, simTag: false,
+    recalibration: { requesting: false, queued: false, error: "" },
     notices: new Map(), historyRows: new Map(), activity: 0,
     summaries: new Map(), pending: new Map(), summaryKey: null,
   };
@@ -498,13 +512,25 @@ function linkFor(name) {
   plot.append(tag, canvas);
   const names = [...links.keys(), name].sort();
   $("energy-plots").insertBefore(plot, $("energy-plots").children[names.indexOf(name)] ?? null);
-  l = { name, buf, arrival: null, movedAt: null, plot, chart: new EnergyChart(canvas, buf) };
+  l = { name, buf, arrival: null, movedAt: null, sensor: null, sensorAt: 0, plot, chart: new EnergyChart(canvas, buf) };
   links.set(name, l);
   renderPicker();
   return l;
 }
 
-const isFresh = (l, nowMs) => l.arrival != null && nowMs - l.arrival < STALE_MS;
+function sensorHealth(l, nowMs) {
+  if (l.sensor) {
+    const age = l.sensor.age_s == null ? Infinity : l.sensor.age_s + (nowMs - l.sensorAt) / 1000;
+    if (["ready", "calibrating", "warming"].includes(l.sensor.health) && age * 1000 >= STALE_MS && !st.ended) return "stale";
+    return l.sensor.health;
+  }
+  return "waiting";
+}
+
+const isFresh = (l, nowMs) => ["ready", "calibrating", "warming"].includes(sensorHealth(l, nowMs));
+const isReady = (l, nowMs) => sensorHealth(l, nowMs) === "ready";
+const score = (v) => Number.isFinite(v) ? `${(v * 100).toFixed(1)}%` : "—";
+const number = (v, digits = 2) => Number.isFinite(v) ? v.toFixed(digits) : "—";
 
 function clock(t) {
   return new Date(t * 1000).toLocaleTimeString([], { hour12: false });
@@ -527,7 +553,7 @@ function friendlyDay(t) {
 }
 
 function pushAverage(t, nowMs) {
-  const live = [...links.values()].filter((l) => isFresh(l, nowMs) && l.buf.latest()?.energy != null);
+  const live = [...links.values()].filter((l) => isReady(l, nowMs) && l.buf.latest()?.energy != null);
   if (!live.length) return;
   const energy = live.reduce((sum, l) => sum + l.buf.latest().energy, 0) / live.length;
   const moving = live.some((l) => l.buf.latest().level === "moving");
@@ -537,21 +563,36 @@ function pushAverage(t, nowMs) {
 function onMessage(msg) {
   if (msg.type === "frame") {
     const l = linkFor(msg.link ?? "A");
-    l.arrival = performance.now();
-    const f = l.buf.push(msg, l.arrival);
+    const arrival = performance.now();
+    if (!msg.sim) l.arrival = arrival;
+    const f = l.buf.push(msg, arrival);
     if (f && f.level === "moving") l.movedAt = f.t;
-    if (f) pushAverage(f.t, l.arrival);
+    if (f) pushAverage(f.t, arrival);
+  } else if (msg.type === "sensor") {
+    const l = linkFor(msg.link);
+    l.sensor = msg;
+    l.sensorAt = performance.now();
+    if (msg.health === "calibrating") {
+      st.recalibration.queued = false;
+      st.recalibration.error = "";
+    }
+  } else if (msg.type === "detector") {
+    st.detector = msg;
+    renderWhy();
   } else if (msg.type === "source") {
     st.source = msg.mode;
     st.ended = !!msg.ended;
   } else if (msg.type === "config") {
     st.cfg = msg;
     for (const name of msg.links ?? []) linkFor(name);
+    renderWhy();
   } else if (msg.type === "state") {
     if (msg.sim) st.simTag = true;
     else if (msg.state === "IDLE") st.simTag = false;
+    const changed = st.state?.state !== msg.state;
     st.state = msg;
     st.stateAt = performance.now();
+    if (changed) renderWhy();
   } else if (msg.type === "alarm") st.alarm = !!msg.on;
   else if (msg.type === "event") onEvent(msg);
   else if (msg.type === "log") {
@@ -571,10 +612,13 @@ function onState(s) {
   if (s !== "open") return;
   ever = true;
   st = fresh();
-  for (const l of links.values()) {
-    l.buf.reset(0);
-    l.arrival = l.movedAt = null;
-  }
+  links.clear();
+  $("motion").replaceChildren();
+  $("energy-plots").replaceChildren();
+  $("wave-pick").replaceChildren();
+  for (const chip of $("chips").querySelectorAll('[id^="chip-"]')) chip.remove();
+  pick = "auto";
+  wave.buffer = empty;
   avg.reset(0);
   for (const id of ["events", "history", "cg-activity"]) $(id).replaceChildren();
   renderWhy();
@@ -586,14 +630,16 @@ function onEvent(ev) {
   if (st.events.length > MAX_ROWS) st.events.shift();
   st.lastVerdict = ev;
   if (ev.label === "fall") st.lastFall = ev;
-  const d = ev.details;
+  const d = ev.details ?? {};
   const parts = [];
-  if (d.peak != null) parts.push(`peak ${d.peak}`, `room change ${d.static_change}`);
+  if (d.peak != null) parts.push(`peak ${d.peak}`);
+  if (d.static_change != null) parts.push(`room change ${d.static_change}`);
   if (d.duration_s != null) parts.push(`${d.duration_s} s`);
   parts.push(`link ${ev.links}`);
   if (ev.why === "moved_again") parts.push("moved again, so not a fall");
   if (ev.why === "cut_short") parts.push("kept moving, so not a fall");
-  if (ev.confidence < 1 && ev.why === "classified") parts.push(`confidence ${ev.confidence}`);
+  if (ev.why === "classified" && Number.isFinite(d.fall_probability)) parts.push(`fall score ${score(d.fall_probability)}`);
+  else if (ev.why === "classified" && st.cfg?.detector === "rf") parts.push(`selected score ${score(ev.confidence)}`);
   if (ev.sim) parts.push("simulated");
   addRow($("events"), ev.t, ev.label, parts.join(" · "), "event");
   renderWhy();
@@ -776,36 +822,82 @@ function para(cls, text) {
   return p;
 }
 
+function probabilityBar(label, value, selected) {
+  const row = document.createElement("div");
+  row.className = "score-row";
+  row.dataset.selected = String(selected);
+  const head = document.createElement("div");
+  head.className = "why-label";
+  const name = document.createElement("span");
+  name.textContent = LABELS[label] ?? label;
+  const val = document.createElement("b");
+  val.textContent = score(value);
+  head.append(name, val);
+  const track = document.createElement("div");
+  track.className = "bar";
+  const fill = document.createElement("div");
+  fill.className = "bar-fill";
+  fill.style.width = `${Math.max(0, Math.min(100, value * 100))}%`;
+  track.append(fill);
+  row.append(head, track);
+  return row;
+}
+
+function featureValues(details) {
+  const values = document.createElement("dl");
+  values.className = "feature-values";
+  for (const [key, label, unit] of FEATURES) {
+    if (!Number.isFinite(details[key])) continue;
+    const name = document.createElement("dt");
+    name.textContent = label;
+    const value = document.createElement("dd");
+    value.textContent = `${number(details[key])}${unit}`;
+    values.append(name, value);
+  }
+  return values;
+}
+
 function renderWhy() {
   const box = $("why");
   const cfg = st.cfg;
-  const ev = st.lastFall ?? st.lastVerdict;
-  $("why-title").textContent = !ev || ev.label === "fall" ? "Why it's a fall" : "Why it's not a fall";
+  const activeFall = ["COUNTDOWN", "ALERTED"].includes(flowState());
+  const ev = activeFall ? st.lastFall ?? st.lastVerdict : st.lastVerdict;
+  const rf = (st.detector?.name ?? cfg?.detector) === "rf";
+  $("why-title").textContent = "Detector verdict";
   if (!ev || !cfg) {
-    const rule = cfg ? `peak ≥ ${cfg.t_fall} and room change ≥ ${cfg.t_static}` : "a hard movement and a changed room";
-    box.replaceChildren(para("why-empty", `No Motion Event yet. A fall needs ${rule}, then ${cfg ? cfg.stillness_s : 4} s without movement.`));
+    const wait = `After motion stops, the detector waits ${cfg?.stillness_s ?? 4} s to check for resumed movement.`;
+    const rule = rf ? "The random forest classifies six features from each completed event." : "The threshold detector checks peak energy and room change.";
+    box.replaceChildren(para("why-empty", `No completed motion event yet. ${rule} ${wait}`));
     return;
   }
-  const d = ev.details;
+  const d = ev.details ?? {};
   const rows = [para("why-meta", `${clock(ev.t)} · link ${ev.links} · ${LABELS[ev.label] ?? ev.label}${ev.sim ? " · simulated" : ""}`)];
-  if (d.peak != null) {
+  if (ev.why === "moved_again") {
+    rows.push(para("why-foot", `Movement resumed within the ${cfg.stillness_s} s stillness window. This event was rejected before classification.`));
+  } else if (ev.why === "cut_short") {
+    rows.push(para("why-foot", "Continuous movement exceeded the event limit. The pipeline marked it as walking before classification."));
+  } else if (rf) {
+    const probabilities = d.class_probabilities ?? {};
+    for (const label of ["fall", "sit-down", "walk"]) {
+      if (Number.isFinite(probabilities[label])) rows.push(probabilityBar(label, probabilities[label], ev.label === label));
+    }
+    if (!Object.keys(probabilities).length && Number.isFinite(d.fall_probability)) {
+      rows.push(probabilityBar("fall", d.fall_probability, ev.label === "fall"));
+    }
+    const threshold = st.detector?.fall_threshold;
+    const rule = Number.isFinite(threshold)
+      ? `Fall is selected at a fall score ≥ ${score(threshold)}; otherwise the strongest non-fall class is selected.`
+      : "The class with the highest model score is selected.";
+    rows.push(para("why-foot", `Random forest: ${ev.label} · selected class score ${score(ev.confidence)}. ${rule}`));
+    rows.push(para("score-note", "Model scores are uncalibrated class probabilities, not real-world risk estimates."));
+  } else if (Number.isFinite(d.peak) && Number.isFinite(d.static_change)) {
     rows.push(bar("Peak motion energy", d.peak, cfg.t_fall, "T_FALL"));
-    rows.push(bar("Room Change (static_change)", d.static_change, cfg.t_static, "T_STATIC"));
+    rows.push(bar("Room change", d.static_change, cfg.t_static, "T_STATIC"));
+    rows.push(para("why-foot", ev.label === "fall"
+      ? `Both thresholds passed after ${cfg.stillness_s} s without resumed movement.`
+      : "This event did not pass both fall thresholds."));
   }
-  let foot;
-  if (ev.why === "moved_again") foot = `Moved again within the ${cfg.stillness_s} s Stillness Window, so not a fall.`;
-  else if (ev.why === "cut_short") foot = "Kept moving for 8 s, so it was walking, not a fall.";
-  else if (cfg.detector !== "threshold") {
-    foot = `The random forest decided ${ev.label} (confidence ${ev.confidence}); the thresholds are shown for reference.`;
-  } else if (ev.label === "fall") {
-    foot = `A hard movement, the room looks different afterwards (someone on the floor), and ${cfg.stillness_s} s without moving.`;
-  } else {
-    const low = [];
-    if (d.peak < cfg.t_fall) low.push(`peak ${d.peak} is under ${cfg.t_fall}`);
-    if (d.static_change < cfg.t_static) low.push(`room change ${d.static_change} is under ${cfg.t_static}`);
-    foot = `Not a fall: ${low.join(" and ")}.`;
-  }
-  rows.push(para("why-foot", foot));
+  if (FEATURES.some(([key]) => Number.isFinite(d[key]))) rows.push(featureValues(d));
   box.replaceChildren(...rows);
 }
 
@@ -844,14 +936,18 @@ function statusFor(nowMs) {
   }
   if (s === "ALERTED") return { tone: "alerted", word: "CAREGIVER ALERTED", sub: `at ${clock(st.state.t)} · resolve when handled` };
   const live = liveLinks(nowMs);
-  if (live.some((l) => l.buf.latest()?.level === "calibrating")) {
-    return { tone: "calibrating", word: "CALIBRATING", sub: "keep the area still for 10 s" };
+  if (live.some((l) => sensorHealth(l, nowMs) === "calibrating")) {
+    return { tone: "calibrating", word: "CALIBRATING", sub: `keep the area still for ${st.cfg?.calibrate_s ?? 10} s` };
+  }
+  if (live.some((l) => sensorHealth(l, nowMs) === "warming")) {
+    return { tone: "calibrating", word: "SIGNAL WARMING", sub: "waiting for fresh motion measurements" };
   }
   if (st.state && st.state.sim) return { tone: "idle", word: "ALL QUIET", sub: "Simulated Fall playing…" };
   if (!live.length) {
-    return { tone: "idle", word: "ALL QUIET", sub: st.ended ? "replay finished · Simulate fall still works" : "waiting for packets" };
+    return { tone: "idle", word: st.ended ? "STREAM ENDED" : "SENSORS OFFLINE", sub: st.ended ? "replay finished · Simulate fall still works" : "waiting for usable sensor packets" };
   }
-  return { tone: "idle", word: "ALL QUIET", sub: "no fall in progress" };
+  const unavailable = [...links.values()].filter((l) => !isReady(l, nowMs)).map((l) => l.name);
+  return { tone: "idle", word: "ALL QUIET", sub: unavailable.length ? `limited coverage · link ${unavailable.join(", ")} unavailable` : "no fall in progress" };
 }
 
 function setText(el, text) {
@@ -919,15 +1015,22 @@ function careFor(nowMs) {
     };
   }
   const live = liveLinks(nowMs);
-  if (live.some((l) => l.buf.latest()?.level === "calibrating")) {
-    return { tone: "calm", mood: "happy", pill: "Getting ready", word: "Getting ready", sub: "Learning what the empty room looks like…" };
+  if (live.some((l) => sensorHealth(l, nowMs) === "calibrating")) {
+    return { tone: "calm", mood: "happy", pill: "Getting ready", word: "Getting ready", sub: "Learning what the empty room looks like. Keep the area still…" };
+  }
+  if (live.some((l) => sensorHealth(l, nowMs) === "warming")) {
+    return { tone: "watch", mood: "worried", pill: "Signal warming", word: "Waiting for fresh signal", sub: "The sensors are receiving packets. Motion readings are not ready yet." };
   }
   if (!live.length && !(st.state && st.state.sim)) {
     return st.ended
-      ? { tone: "calm", mood: "happy", pill: "Watching", word: "All is well", sub: "The room is calm. No falls detected." }
-      : { tone: "offline", mood: "worried", pill: "Sensors offline", word: "Can't see the room", sub: "No signal from the sensors. Are they plugged in?" };
+      ? { tone: "offline", mood: "happy", pill: "Stream ended", word: "Replay complete", sub: "Sensor monitoring has stopped. Start a live stream to watch the room." }
+      : { tone: "offline", mood: "worried", pill: "Sensors offline", word: "Can't see the room", sub: "No usable signal from the sensors. Check their connections." };
   }
-  const moving = live.some((l) => l.buf.latest()?.level === "moving");
+  const unavailable = [...links.values()].filter((l) => !isReady(l, nowMs));
+  if (unavailable.length && !st.state?.sim) {
+    return { tone: "watch", mood: "worried", pill: "Limited signal", word: "A sensor needs attention", sub: `Link ${unavailable.map((l) => l.name).join(", ")} is unavailable. Room coverage is reduced.` };
+  }
+  const moving = live.some((l) => (l.sensor?.level ?? l.buf.latest()?.level) === "moving");
   return { tone: "calm", mood: "happy", pill: "Watching", word: "All is well", sub: moving ? "Someone is moving around. Everything looks normal." : "The room is calm. No falls detected." };
 }
 
@@ -1057,20 +1160,86 @@ function renderCare(nowMs) {
 function renderMotion(nowMs) {
   const box = $("motion");
   for (const l of [...links.values()].sort((a, b) => a.name.localeCompare(b.name))) {
-    let pill = box.querySelector(`[data-link="${l.name}"]`);
+    let pill = [...box.children].find((el) => el.dataset.link === l.name);
     if (!pill) {
-      pill = document.createElement("span");
-      pill.className = "chip";
+      pill = document.createElement("div");
+      pill.className = "chip sensor-chip";
       pill.dataset.link = l.name;
-      pill.innerHTML = '<span class="dot"></span><span></span>';
+      pill.innerHTML = '<div class="sensor-heading"><span class="dot"></span><span class="sensor-name"></span><span class="sensor-energy"></span></div><span class="sensor-detail"></span><div class="sensor-progress" hidden><span></span></div>';
       box.append(pill);
     }
-    const f = isFresh(l, nowMs) ? l.buf.latest() : null;
-    const level = f ? f.level : "";
-    if (pill.dataset.level !== level) pill.dataset.level = level;
-    let text = `${l.name} · no data`;
-    if (f) text = `${l.name} · ${f.level}${f.energy != null ? ` ${f.energy.toFixed(1)}×` : ""}`;
-    setText(pill.lastChild, text);
+    const health = sensorHealth(l, nowMs);
+    const fresh = isFresh(l, nowMs);
+    const f = fresh ? l.buf.latest() : null;
+    const sensor = l.sensor;
+    const level = fresh ? sensor?.level ?? f?.level ?? "" : "";
+    pill.dataset.level = health === "ready" ? level : health;
+    pill.dataset.health = health;
+    setText(pill.querySelector(".sensor-name"), `${l.name} · ${HEALTH[health] ?? health}`);
+    const energy = health === "ready" ? sensor?.energy ?? f?.energy : null;
+    setText(pill.querySelector(".sensor-energy"), Number.isFinite(energy) ? `${number(energy, 1)}×` : "");
+    const cal = sensor?.calibration;
+    let text = "No calibrated signal yet";
+    if (health === "calibrating" && cal) {
+      text = cal.phase === "settling" ? `Step away · calibration starts in ${Math.ceil(cal.settle_remaining_s ?? 0)} s`
+        : `${number(cal.elapsed_s, 1)} / ${number(cal.duration_s, 0)} s · keep the area still`;
+    } else if (cal?.ready) {
+      text = `${cal.usable_channels ?? "—"} / ${cal.total_channels ?? "—"} channels · baseline ${number(cal.baseline, 4)}`;
+    }
+    if (health === "warming") text = "Collecting fresh motion windows · detection not ready";
+    if (["stale", "invalid"].includes(health)) text = health === "invalid" ? "Missing or unusable CSI values" : "Check receiver and sender connections";
+    if (sensor?.invalid_packets) text += ` · ${sensor.invalid_packets} invalid`;
+    setText(pill.querySelector(".sensor-detail"), text);
+    const progress = pill.querySelector(".sensor-progress");
+    show(progress, health === "calibrating" && !!cal);
+    progress.firstElementChild.style.width = `${Math.min(100, Math.max(0, (cal?.progress ?? 0) * 100))}%`;
+  }
+}
+
+function canRecalibrate(nowMs) {
+  return conn === "open" && st.source === "LIVE" && !!st.state && flowState() === "IDLE"
+    && !st.state.sim && !st.simTag && !st.ended
+    && !st.recalibration.requesting && !st.recalibration.queued
+    && [...links.values()].some((l) => isFresh(l, nowMs) && l.sensor?.calibration?.ready)
+    && ![...links.values()].some((l) => l.sensor?.health === "calibrating");
+}
+
+function renderRecalibration(nowMs) {
+  $("recalibrate").disabled = !canRecalibrate(nowMs);
+  const r = st.recalibration;
+  const instruction = `Keep the room still for ${st.cfg?.calibrate_s ?? 10} seconds`;
+  const calibrating = [...links.values()].some((l) => l.sensor?.health === "calibrating");
+  const settling = [...links.values()].filter((l) => l.sensor?.health === "calibrating" && l.sensor.calibration?.phase === "settling");
+  const settleLeft = Math.ceil(Math.max(0, ...settling.map((l) => l.sensor.calibration.settle_remaining_s ?? 0)));
+  const note = r.requesting ? "Requesting recalibration…" : r.error ? r.error
+    : r.queued ? "Recalibration requested · Step away and keep the room still"
+    : settling.length ? `Step away · calibration starts in ${settleLeft} s`
+    : calibrating ? `Calibrating · ${instruction}` : instruction;
+  setText($("recalibrate-note"), note);
+  $("recalibrate-note").classList.toggle("error", !!r.error);
+}
+
+async function recalibrateSensors() {
+  if (!canRecalibrate(performance.now())) return;
+  const r = st.recalibration;
+  r.requesting = true;
+  r.error = "";
+  renderRecalibration(performance.now());
+  try {
+    const response = await fetch("/calibrate", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (response.status === 202) {
+      r.queued = ![...links.values()].some((l) => l.sensor?.health === "calibrating");
+    } else {
+      r.error = response.status === 409 ? "Recalibration unavailable. Wait for ready sensors and no fall in progress."
+        : "Recalibration could not start. Try again.";
+    }
+  } catch {
+    r.error = "Lost connection to the dashboard. Reconnecting.";
+  } finally {
+    r.requesting = false;
+    renderRecalibration(performance.now());
   }
 }
 
@@ -1079,7 +1248,9 @@ function renderMap(nowMs) {
   for (const name of ["A", "B"]) {
     const l = links.get(name);
     const f = l && isFresh(l, nowMs) ? l.buf.latest() : null;
-    let status = f ? (f.level === "moving" ? "moving" : "quiet") : "none";
+    const health = l ? sensorHealth(l, nowMs) : "waiting";
+    const level = l?.sensor?.level ?? f?.level;
+    let status = health === "ready" ? (level === "moving" ? "moving" : "quiet") : "none";
     if (s === "COUNTDOWN" || s === "ALERTED") {
       if (st.lastFall && st.lastFall.links.split("+").includes(name)) status = "event";
     } else if (s === "FALL_CANDIDATE" && l && l.movedAt != null && l.movedAt >= st.state.t - 10) status = "candidate";
@@ -1088,14 +1259,22 @@ function renderMap(nowMs) {
     const glow = $(`glow-${name}`);
     const on = status === "moving" || status === "event" || status === "candidate" ? status : "";
     if (glow.dataset.on !== on) glow.dataset.on = on;
-    let text = "no data";
-    if (f) text = f.energy != null ? `${f.energy.toFixed(1)}× ${f.level}` : f.level;
+    const energy = health === "ready" ? l?.sensor?.energy ?? f?.energy : null;
+    const text = Number.isFinite(energy) ? `${number(energy, 1)}× ${level}` : MAP_HEALTH[health] ?? health;
     setText($(`map-${name}`), text);
   }
 }
 
 function renderChips(nowMs) {
   setText($("dev-source"), st.source ? (st.ended ? `${st.source} · ended` : st.source) : "–");
+  setText($("monitor-mode"), conn !== "open" ? (ever ? "Disconnected" : "Connecting…") : st.simTag ? "SIMULATED" : st.source ? `${st.source}${st.ended ? " · ended" : ""}` : "Connecting…");
+  const detector = st.detector;
+  const modelName = (detector?.name ?? st.cfg?.detector) === "rf" ? "Random forest" : "Threshold detector";
+  const modelChip = $("dev-detector");
+  setText(modelChip, detector ? `${modelName} · ${detector.ready ? "loaded" : "unavailable"}` : st.cfg ? modelName : "Detector connecting…");
+  modelChip.classList.toggle("alert", !!detector && !detector.ready);
+  const modelInfo = [detector?.model_path, detector?.trained_at ? `Trained ${detector.trained_at}` : "", detector?.error].filter(Boolean).join(" · ");
+  if (modelChip.title !== modelInfo) modelChip.title = modelInfo;
   for (const l of links.values()) {
     let chip = $(`chip-${l.name}`);
     if (!chip) {
@@ -1104,17 +1283,25 @@ function renderChips(nowMs) {
       chip.id = `chip-${l.name}`;
       $("chips").insertBefore(chip, $("stale"));
     }
+    const health = sensorHealth(l, nowMs);
     const f = isFresh(l, nowMs) ? l.buf.latest() : null;
-    const hz = f && f.hz != null ? `${f.hz.toFixed(0)} packets/s` : "";
-    setText(chip, f ? `${l.name} · ${[hz, `${f.rssi} dBm`].filter(Boolean).join(" · ")}` : `${l.name} · no data`);
+    const hz = l.sensor?.hz ?? f?.hz;
+    const rssi = l.sensor?.rssi ?? f?.rssi;
+    const telemetry = [Number.isFinite(hz) ? `${number(hz, 0)} packets/s` : "", Number.isFinite(rssi) ? `${rssi} dBm` : ""].filter(Boolean);
+    const packets = l.sensor?.packets_received;
+    chip.title = Number.isFinite(packets) ? `${packets} packets received` : "";
+    setText(chip, `${l.name} · ${isFresh(l, nowMs) && telemetry.length ? telemetry.join(" · ") : HEALTH[health] ?? health}`);
   }
   const stale = $("stale");
   let text = "";
   if (ever && conn !== "open") text = "Lost the connection to run.py, retrying";
   else if (conn === "open" && !st.ended) {
-    const last = Math.max(openedAt, ...[...links.values()].map((l) => l.arrival ?? 0));
-    const since = nowMs - last;
-    if (since > STALE_MS) text = `No packets for ${Math.floor(since / 1000)} s: is the SEND board powered?`;
+    const unavailable = [...links.values()].filter((l) => ["stale", "invalid"].includes(sensorHealth(l, nowMs)));
+    if (unavailable.length) text = `Link ${unavailable.map((l) => l.name).join(", ")}: sensor signal unavailable`;
+    else {
+      const last = Math.max(openedAt, ...[...links.values()].map((l) => l.arrival ?? 0));
+      if (nowMs - last > STALE_MS && !st.state?.sim) text = "Waiting for sensor packets: check sender and receiver connections";
+    }
   }
   stale.hidden = !text;
   setText(stale, text);
@@ -1128,7 +1315,24 @@ function renderResident(nowMs) {
   let word = "All good";
   let sub = conn === "open" ? "Pulse is looking out for you" : "Connecting…";
   let buttons = false;
-  if (conn === "open" && s === "COUNTDOWN") {
+  if (conn !== "open") {
+    mood = "worried";
+    word = "Monitor reconnecting";
+    sub = "The connection is unavailable. Trying again…";
+  } else if (st.ended && s === "IDLE") {
+    word = "Replay complete";
+    sub = "Live sensor monitoring is stopped";
+  } else if (s === "IDLE" && !st.state?.sim && !liveLinks(nowMs).length) {
+    mood = "worried";
+    word = "Sensors connecting";
+    sub = "Waiting for a usable signal from the room";
+  } else if (s === "IDLE" && liveLinks(nowMs).some((l) => sensorHealth(l, nowMs) === "calibrating")) {
+    word = "Getting ready";
+    sub = "Please keep the area still while the sensors calibrate";
+  } else if (s === "IDLE" && liveLinks(nowMs).some((l) => sensorHealth(l, nowMs) === "warming")) {
+    word = "Signal warming";
+    sub = "Waiting for fresh motion readings from the room";
+  } else if (conn === "open" && s === "COUNTDOWN") {
     tone = "ask";
     mood = "worried";
     word = "Are you OK?";
@@ -1322,6 +1526,7 @@ function loop() {
     }
     renderStatus(nowMs);
     renderMotion(nowMs);
+    renderRecalibration(nowMs);
     renderMap(nowMs);
   }
   renderChips(nowMs);
@@ -1347,6 +1552,7 @@ for (const [id, msg] of commands) {
   });
 }
 for (const b of document.querySelectorAll(".views button")) b.addEventListener("click", () => setView(b.dataset.view));
+$("recalibrate").addEventListener("click", recalibrateSensors);
 for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("click", () => setTab(b.dataset.tab));
 $("cg-all").addEventListener("click", () => {
   renderFalls();

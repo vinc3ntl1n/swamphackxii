@@ -121,7 +121,11 @@ class DashboardTests(unittest.TestCase):
             def __exit__(self, *unused):
                 closed.append(self.port)
 
-            def readline(self):
+            @property
+            def in_waiting(self):
+                return 0
+
+            def read(self, size):
                 stop.wait(0.01)
                 return b""
 
