@@ -83,7 +83,7 @@ Run everything from the repo root with `python -m`. Each command finds the recei
 | `python -m backend.training.train` | Train the random forest on `data/recordings/train/`, score it on `data/recordings/test/` (or cross-validation if there's no test set), write `data/model.joblib` and `data/results.json`. |
 | `python -m backend.run --detector rf` | Use the trained model instead of the threshold rules. |
 
-All tunable numbers (thresholds, timings, ntfy topic) are in `backend/config.py`.
+All tunable numbers (thresholds, timings) are in `backend/config.py`. Phone numbers stay out of git, in `.env` (see the dashboard section below).
 
 Session logs and Recordings store one packet per line: `<laptop time>\t<link>\t<CSI_DATA line>`. Files from before the second receiver have no link column and read as link A, so the old Recordings still train as before. A Recording's `.json` keeps one calibration per link, and its `rate_hz` gives packets per second per link. `calibration.json` also keeps one calibration per link. `record.py` recalibrates when a receiver has none saved yet.
 

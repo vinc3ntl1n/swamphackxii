@@ -26,6 +26,3 @@ T_STATIC = 0.30
 SIT_MAX_S = 3.5
 
 COUNTDOWN_S = 10.0
-
-NTFY_SERVER = "https://ntfy.sh"
-NTFY_PREFIX = "swampfall-ef86646d"
