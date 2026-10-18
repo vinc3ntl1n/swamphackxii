@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from backend import config
-from backend.capture.csi import Frame
+from backend.capture.csi import DEFAULT_LINK, Frame
 
 CALIBRATING, NO_MOTION, MOVING = "calibrating", "no motion", "moving"
 MEASURE = "mean-shift-0.5"
@@ -29,6 +29,7 @@ class MotionEvent:
     energy: np.ndarray
     amp: np.ndarray
     cut_short: bool
+    link: str = DEFAULT_LINK
 
     @property
     def duration(self) -> float:
@@ -65,7 +66,8 @@ def calibration_from_frames(frames: list[Frame]) -> dict | None:
 
 
 class MotionTracker:
-    def __init__(self) -> None:
+    def __init__(self, link: str = DEFAULT_LINK) -> None:
+        self.link = link
         self.calibrate()
 
     def calibrate(self) -> None:
@@ -152,7 +154,7 @@ class MotionTracker:
     def _cut(self, start: float, end: float, cut_short: bool) -> MotionEvent:
         rows = [h for h in self.history if start - config.PRE_EVENT_S <= h[0] <= end]
         return MotionEvent(
-            start=start, end=end, cut_short=cut_short,
+            start=start, end=end, cut_short=cut_short, link=self.link,
             t=np.array([r[0] for r in rows]),
             energy=np.array([r[1] for r in rows]),
             amp=np.stack([r[2] for r in rows]),

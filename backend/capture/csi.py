@@ -8,15 +8,18 @@ from typing import Iterator
 
 import numpy as np
 
+DEFAULT_LINK = "A"
+
 
 @dataclass
 class Frame:
     t: float
     rssi: int
     amp: np.ndarray
+    link: str = DEFAULT_LINK
 
 
-def parse_line(line: str, t: float) -> Frame | None:
+def parse_line(line: str, t: float, link: str = DEFAULT_LINK) -> Frame | None:
     if not line.startswith("CSI_DATA"):
         return None
     try:
@@ -31,14 +34,22 @@ def parse_line(line: str, t: float) -> Frame | None:
         raw[:4] = 0
     n = raw.size // 2
     imag, real = raw[0:2 * n:2], raw[1:2 * n:2]
-    return Frame(t=t, rssi=rssi, amp=np.hypot(imag, real))
+    return Frame(t=t, rssi=rssi, amp=np.hypot(imag, real), link=link)
 
 
-def read_log(path: str | Path) -> Iterator[tuple[float, str]]:
+def log_row(t: float, link: str, line: str) -> str:
+    return f"{t:.6f}\t{link}\t{line}\n"
+
+
+def read_log(path: str | Path) -> Iterator[tuple[float, str, str]]:
     path = Path(path)
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt") as f:
         for row in f:
-            t, sep, line = row.rstrip("\n").partition("\t")
-            if sep:
-                yield float(t), line
+            t, sep, rest = row.rstrip("\n").partition("\t")
+            if not sep:
+                continue
+            link, sep, line = rest.partition("\t")
+            if not sep:
+                link, line = DEFAULT_LINK, rest
+            yield float(t), link, line

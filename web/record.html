@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Record view</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="record">
+  <section class="cue" aria-label="Timing cues">
+    <div class="phase" id="phase" data-tone="idle">
+      <div class="cue-head"><span id="clip"></span><span id="label"></span></div>
+      <div class="wait" id="wait" role="alert" hidden>WAIT FOR GO</div>
+      <div class="word-box" id="word-box"><div class="word" id="word">CONNECTING</div></div>
+      <div class="sub" id="sub"></div>
+      <div class="progress"><div class="progress-fill" id="progress"></div></div>
+    </div>
+    <p class="instruction" id="instruction"></p>
+    <canvas class="timeline" id="timeline" role="img" aria-label="Phase timeline of the current clip"></canvas>
+    <p class="result" id="result"></p>
+    <h2 class="list-title">Saved clips this session</h2>
+    <ol class="saved" id="saved"></ol>
+  </section>
+  <section class="charts" aria-label="Live signal">
+    <div class="chips">
+      <span class="chip" id="source">–</span>
+      <span class="chip"><span id="hz">–</span><span class="k">packets/s</span></span>
+      <span class="chip"><span class="k">RSSI</span><span id="rssi">–</span></span>
+      <span class="chip" id="level-chip"><span class="dot"></span><span id="level">–</span></span>
+      <span class="chip alert" id="stale" hidden></span>
+    </div>
+    <figure class="card wave">
+      <header>
+        <h2>Waveform</h2>
+        <span class="note">8 subcarriers over time, each centred on its 20 s median (±8 dB soft scale):
+          flat = still, swings = movement</span>
+      </header>
+      <div class="plot"><canvas id="wave"></canvas></div>
+    </figure>
+    <figure class="card heat">
+      <header>
+        <h2>Subcarrier heatmap</h2>
+        <span class="note" id="heat-note"></span>
+        <span class="scale">
+          <span id="scale-lo"></span><canvas id="scale" width="110" height="1"></canvas><span id="scale-hi"></span>
+        </span>
+        <div class="toggle" role="group" aria-label="Heatmap colour">
+          <button type="button" data-mode="amp" aria-pressed="true">Amplitude</button>
+          <button type="button" data-mode="change" aria-pressed="false">Change</button>
+        </div>
+      </header>
+      <div class="plot"><canvas id="heat"></canvas></div>
+    </figure>
+    <figure class="card energy">
+      <header>
+        <h2>Motion energy</h2>
+        <span class="note">dashed lines: T_ON starts a Motion Event, T_OFF ends it</span>
+        <span class="readout" id="energy">–</span>
+      </header>
+      <div class="plot"><canvas id="energy-plot"></canvas></div>
+    </figure>
+    <figure class="card shape">
+      <header><h2>CSI shape</h2><span class="note">amplitude across subcarriers, last 0.5 s fading</span></header>
+      <div class="plot"><canvas id="shape"></canvas></div>
+    </figure>
+  </section>
+</main>
+<div class="tip" id="tip" hidden></div>
+<script type="module">
+import {
+  SignalBuffer, Waveform, Heatmap, EnergyChart, ShapeChart, SCALE_LABELS,
+  readTheme, watchTheme, drawScale, sparkline, connect, timeAtX,
+} from "./signal.js";
+
+const $ = (id) => document.getElementById(id);
+const ACTION = { fall: "FALL", "sit-down": "SIT DOWN", walk: "WALK", empty: "NOBODY MOVES" };
+const AFTER = {
+  fall: ["HOLD STILL", "STAY DOWN"],
+  "sit-down": ["HOLD STILL", "STAY SEATED"],
+  walk: ["KEEP WALKING", "across the line"],
+  empty: ["NOBODY MOVES", "stay out of the area"],
+};
+const STRIP_AFTER = {
+  fall: "stay down", "sit-down": "stay seated", walk: "keep walking", empty: "nobody moves",
+};
+const INSTRUCTIONS = {
+  fall: "Fall onto the mat, then stay down and still until saved.",
+  "sit-down": "Sit down, then stay still until saved.",
+  walk: "Walk across the line between the boards.",
+  empty: "Stay out of the area. Nobody moves.",
+};
+const HEAT_NOTES = {
+  amp: "colour = amplitude, subcarrier position ↑",
+  change: "colour = dB change from each subcarrier's 20 s median, red = drop",
+};
+const GO_CUE_S = 2;
+const RESULT_HOLD_S = 2;
+const STALE_MS = 2000;
+
+const buffer = new SignalBuffer();
+const wave = new Waveform($("wave"), buffer);
+const heat = new Heatmap($("heat"), buffer);
+const energy = new EnergyChart($("energy-plot"), buffer);
+const shape = new ShapeChart($("shape"), buffer);
+const plots = { wave: $("wave"), heat: $("heat"), energy: $("energy-plot") };
+let theme = readTheme();
+let tokens = readTokens();
+let state = fresh();
+let conn = "connecting";
+let ever = false;
+let openedAt = performance.now();
+let lastArrival = null;
+let hover = null;
+let sparks = [];
+let shownWord = null;
+
+function fresh() {
+  return {
+    cfg: null, source: null, clips: new Map(), last: null, lastSaved: null, done: null,
+    failed: null, wait: false, lastT: null, calStart: null,
+  };
+}
+
+function readTokens() {
+  const css = getComputedStyle(document.documentElement);
+  const v = (name) => css.getPropertyValue(name).trim();
+  return {
+    position: v("--strip-position"), count: v("--strip-count"),
+    hold: v("--strip-hold"), onHold: v("--on-strip-hold"),
+    go: v("--go"), onGo: v("--on-go"), good: v("--good"), onGood: v("--on-good"),
+    warning: v("--warning"), onWarning: v("--on-warning"),
+    ink: v("--ink"), muted: v("--muted"), surface: v("--surface"),
+  };
+}
+
+function clipOf(m) {
+  if (!state.clips.has(m.clip)) {
+    state.clips.set(m.clip, { clip: m.clip, label: m.label, position: null, counts: [], go: null, saved: null });
+  }
+  return state.clips.get(m.clip);
+}
+
+function onRecord(m) {
+  if (m.phase === "failed") {
+    state.failed = m.error;
+    return;
+  }
+  if (m.t > 0) state.lastT = m.t;
+  if (m.phase === "calibrating") state.calStart = m.t > 0 ? m.t : null;
+  else if (m.phase === "position") clipOf(m).position = { t: m.t, until: m.until };
+  else if (m.phase === "count") clipOf(m).counts.push({ t: m.t, word: m.word });
+  else if (m.phase === "go") clipOf(m).go = m.t;
+  else if (m.phase === "saved") {
+    const c = clipOf(m);
+    c.saved = m;
+    if (c.go == null) c.go = m.go_t;
+    state.lastSaved = m;
+    addSaved(m);
+  } else if (m.phase === "done") state.done = m;
+  state.last = m;
+}
+
+function onMessage(msg) {
+  if (msg.type === "frame") {
+    lastArrival = performance.now();
+    const f = buffer.push(msg, lastArrival);
+    if (f) heat.add(f);
+  } else if (msg.type === "source") state.source = msg.mode;
+  else if (msg.type === "config") state.cfg = msg;
+  else if (msg.type === "record") onRecord(msg);
+}
+
+function onState(s) {
+  conn = s;
+  if (s !== "open") return;
+  ever = true;
+  state = fresh();
+  buffer.reset(0);
+  heat.repaint();
+  sparks = [];
+  $("saved").replaceChildren();
+  $("result").replaceChildren();
+  lastArrival = null;
+  openedAt = performance.now();
+}
+
+const shortProblem = (p) => p.replace(/\s*\(.*\)\s*$/, "").toUpperCase();
+
+function resultCue(m) {
+  if (!m.problems.length) return { tone: "saved", word: "✓ SAVED", sub: "clean clip", progress: 1 };
+  const [first, ...rest] = m.problems.map(shortProblem);
+  const sub = rest.length ? `also ${rest.join(", ").toLowerCase()}` : "do an extra";
+  return { tone: "problem", word: `⚠ ${first}`, sub, progress: 1 };
+}
+
+function progress(now, start, span) {
+  if (now == null || start == null || !(span > 0)) return 0;
+  return Math.min(1, Math.max(0, (now - start) / span));
+}
+
+function cueFor(now) {
+  const m = state.last;
+  if (conn !== "open" && !state.done) {
+    if (!ever) return { tone: "idle", word: "CONNECTING", sub: "" };
+    return { tone: "idle", word: "SESSION ENDED", sub: "check the terminal" };
+  }
+  if (state.failed) return { tone: "problem", word: "VIEW STOPPED", sub: "recording continues: follow the terminal" };
+  if (!m) return { tone: "idle", word: "READY", sub: "waiting for the first clip" };
+  const cfg = state.cfg;
+  const clip = state.clips.get(m.clip);
+  if (m.phase === "calibrating") {
+    if (state.calStart == null && now != null) state.calStart = now;
+    const p = progress(now, state.calStart, cfg ? cfg.calibrate_s : 0);
+    return { tone: "count", word: "CALIBRATING", sub: "everyone out, nobody moves", progress: p };
+  }
+  if (m.phase === "position") {
+    const prev = state.lastSaved;
+    const holding = prev && prev.clip === m.clip - 1 && now != null;
+    if (holding && now < Math.min(prev.t + RESULT_HOLD_S, m.until)) return resultCue(prev);
+    const left = Math.max(0, Math.ceil(m.until - (now ?? m.t)));
+    const sub = left ? `3-2-1 starts in ${left} s` : "3-2-1 starts now";
+    return { tone: "position", word: "GET IN POSITION", sub, progress: progress(now, m.t, m.until - m.t) };
+  }
+  if (m.phase === "count") {
+    const start = clip && clip.counts.length ? clip.counts[0].t : m.t;
+    return { tone: "count", word: m.word, sub: "HOLD STILL", progress: progress(now, start, 3), wait: true };
+  }
+  if (m.phase === "go") {
+    const post = cfg ? cfg.post_s : 0;
+    const elapsed = (now ?? m.t) - m.t;
+    const p = progress(now, m.t, post);
+    if (elapsed < GO_CUE_S && m.label !== "empty") {
+      return { tone: "go", word: "GO!", sub: ACTION[m.label] ?? m.label.toUpperCase(), progress: p };
+    }
+    if (elapsed >= post) return { tone: "hold", word: "SAVING", sub: "", progress: 1 };
+    const [word, sub] = AFTER[m.label] ?? ["HOLD STILL", ""];
+    return { tone: "hold", word, sub, progress: p };
+  }
+  if (m.phase === "saved") return resultCue(m);
+  if (m.phase === "done") {
+    const totals = `${m.clean} clean · ${m.flagged} flagged`;
+    if (!m.stopped && state.lastSaved) return { ...resultCue(state.lastSaved), sub: `DONE · ${totals}` };
+    return { tone: "position", word: m.stopped ? "STOPPED" : "DONE", sub: totals, progress: 0 };
+  }
+  return { tone: "idle", word: "", sub: "" };
+}
+
+function layoutWord() {
+  const el = $("word");
+  const box = $("word-box");
+  const text = shownWord ?? "";
+  const words = text.split(" ");
+  const options = [text];
+  for (let i = 1; i < words.length; i++) options.push(`${words.slice(0, i).join(" ")}\n${words.slice(i).join(" ")}`);
+  const room = box.clientWidth * 0.98;
+  let best = null;
+  for (const option of options) {
+    const max = Math.max(24, (box.clientHeight * 0.92) / (option.split("\n").length * 1.02));
+    el.textContent = option;
+    el.style.fontSize = `${max}px`;
+    const size = el.offsetWidth > room ? Math.floor((max * room) / el.offsetWidth) : max;
+    if (!best || size > best.size) best = { option, size };
+  }
+  el.textContent = best.option;
+  el.style.fontSize = `${best.size}px`;
+}
+
+function fitSub() {
+  const el = $("sub");
+  el.style.fontSize = "";
+  const base = parseFloat(getComputedStyle(el).fontSize);
+  if (el.scrollWidth > el.clientWidth) {
+    el.style.fontSize = `${Math.floor((base * el.clientWidth) / el.scrollWidth)}px`;
+  }
+}
+
+function setText(el, text) {
+  if (el.textContent === text) return false;
+  el.textContent = text;
+  return true;
+}
+
+function renderCue(now) {
+  const c = cueFor(now);
+  const m = state.last;
+  const e = buffer.latest()?.energy;
+  if (!c.wait || !state.cfg || e == null) state.wait = false;
+  else state.wait = state.wait ? e >= state.cfg.t_off : e >= state.cfg.t_on;
+  const phase = $("phase");
+  if (phase.dataset.tone !== c.tone) phase.dataset.tone = c.tone;
+  phase.toggleAttribute("data-wait", state.wait);
+  $("wait").hidden = !state.wait;
+  if (c.word !== shownWord) {
+    shownWord = c.word;
+    layoutWord();
+  }
+  if (setText($("sub"), c.sub)) fitSub();
+  $("progress").style.width = `${((c.progress ?? 0) * 100).toFixed(1)}%`;
+  let head = "";
+  if (m && m.phase === "done") head = `${m.clip} of ${m.n} recorded`;
+  else if (m && m.clip > 0) head = `CLIP ${m.clip} / ${m.n}`;
+  else if (m) head = "SETUP";
+  setText($("clip"), head);
+  setText($("label"), m ? m.label.toUpperCase() : "");
+  setText($("instruction"), m ? INSTRUCTIONS[m.label] ?? "" : "");
+}
+
+function currentClip() {
+  const m = state.last;
+  if (!m) return null;
+  if (m.phase === "done") return state.clips.get(Math.max(0, ...state.clips.keys())) ?? null;
+  return state.clips.get(m.clip) ?? null;
+}
+
+function sizeCanvas(canvas) {
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  const dpr = window.devicePixelRatio || 1;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+
+function drawTimeline(now) {
+  const { ctx, w, h } = sizeCanvas($("timeline"));
+  if (!w || !h) return;
+  const clip = currentClip();
+  const cfg = state.cfg;
+  const top = 14;
+  const bottom = 42;
+  ctx.font = '600 13px system-ui, -apple-system, "Segoe UI", sans-serif';
+  ctx.textBaseline = "middle";
+  if (!clip || !clip.position || !cfg) {
+    ctx.fillStyle = tokens.position;
+    ctx.fillRect(0, top, w, bottom - top);
+    ctx.fillStyle = tokens.muted;
+    ctx.textAlign = "center";
+    ctx.fillText("the clip timeline appears when a clip starts", w / 2, (top + bottom) / 2);
+    return;
+  }
+  const c0 = clip.position.until;
+  const known = clip.counts.map((c) => c.t);
+  const guess = (i) => (known.length ? known[known.length - 1] + i - known.length + 1 : c0 + i);
+  const counts = [0, 1, 2].map((i) => known[i] ?? guess(i));
+  const go = clip.go ?? counts[2] + 1;
+  const end = go + cfg.post_s;
+  const start = clip.position.t;
+  const cap = Math.max(1.2, (end - start) * 0.1);
+  const x = (t) => ((t - start) / (end + cap - start)) * w;
+  const saved = clip.saved;
+  const flagged = saved && saved.problems.length;
+  const endFill = saved ? (flagged ? tokens.warning : tokens.good) : tokens.position;
+  const endInk = saved ? (flagged ? tokens.onWarning : tokens.onGood) : tokens.muted;
+  const segs = [
+    [start, counts[0], ["get in position", "position"], tokens.position, tokens.ink],
+    [counts[0], counts[1], ["3"], tokens.count, tokens.ink],
+    [counts[1], counts[2], ["2"], tokens.count, tokens.ink],
+    [counts[2], go, ["1"], tokens.count, tokens.ink],
+    [go, go + GO_CUE_S, ["GO!", "GO"], tokens.go, tokens.onGo],
+    [go + GO_CUE_S, end, [STRIP_AFTER[clip.label] ?? "recording"], tokens.hold, tokens.onHold],
+    [end, end + cap, [flagged ? "flagged" : "saved", flagged ? "!" : "✓"], endFill, endInk],
+  ];
+  for (const [a, b, texts, fill, ink] of segs) {
+    const xa = x(a) + 1;
+    const xb = x(b) - 1;
+    if (xb <= xa) continue;
+    ctx.fillStyle = fill;
+    ctx.fillRect(xa, top, xb - xa, bottom - top);
+    const text = texts.find((t) => ctx.measureText(t).width + 8 <= xb - xa);
+    if (text) {
+      ctx.fillStyle = ink;
+      ctx.textAlign = "center";
+      ctx.fillText(text, (xa + xb) / 2, (top + bottom) / 2 + 1);
+    }
+  }
+  const ra = x(go - cfg.pre_s);
+  const rb = x(go + cfg.post_s);
+  const ry = bottom + 8;
+  ctx.strokeStyle = tokens.ink;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(ra, ry - 4);
+  ctx.lineTo(ra, ry);
+  ctx.lineTo(rb, ry);
+  ctx.lineTo(rb, ry - 4);
+  ctx.stroke();
+  ctx.font = '12px system-ui, -apple-system, "Segoe UI", sans-serif';
+  ctx.fillStyle = tokens.muted;
+  ctx.textAlign = "center";
+  ctx.fillText("recorded clip", (ra + rb) / 2, ry + 9);
+  if (now == null) return;
+  const xc = Math.round(x(Math.min(end + cap, Math.max(start, now))));
+  ctx.fillStyle = tokens.ink;
+  ctx.fillRect(xc - 1, top - 3, 2, bottom - top + 6);
+  ctx.beginPath();
+  ctx.moveTo(xc - 6, 1);
+  ctx.lineTo(xc + 6, 1);
+  ctx.lineTo(xc, top - 3);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function addSaved(m) {
+  const cfg = state.cfg;
+  const li = document.createElement("li");
+  const num = document.createElement("span");
+  num.className = "num";
+  num.textContent = `#${m.clip}`;
+  const what = document.createElement("div");
+  const verdict = document.createElement("div");
+  verdict.className = "verdict";
+  verdict.textContent = m.problems.length ? `⚠ ${m.problems.join("; ")}` : "✓ clean";
+  const seen = document.createElement("div");
+  seen.className = "seen";
+  seen.textContent = m.seen;
+  const file = document.createElement("div");
+  file.className = "file";
+  file.textContent = m.file;
+  what.append(verdict, seen, file);
+  const canvas = document.createElement("canvas");
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute("aria-label", `Motion energy of clip ${m.clip} around GO`);
+  li.append(num, what, canvas);
+  $("saved").prepend(li);
+  const spark = { canvas, go: m.go_t, frames: cfg ? buffer.between(m.go_t - cfg.pre_s, m.go_t + cfg.post_s) : [] };
+  sparks.push(spark);
+  if (cfg) sparkline(canvas, spark.frames, spark.go, cfg, theme);
+  const b = document.createElement("b");
+  b.textContent = `Clip ${m.clip}: ${m.problems.length ? `⚠ ${m.problems.join("; ")}` : "✓ saved clean"}`;
+  $("result").replaceChildren(b, document.createTextNode(` · ${m.seen}`));
+}
+
+function renderChips(nowMs) {
+  const f = buffer.latest();
+  const source = $("source");
+  setText(source, state.source ?? "–");
+  if (source.dataset.source !== (state.source ?? "")) source.dataset.source = state.source ?? "";
+  setText($("hz"), f && f.hz != null ? f.hz.toFixed(0) : "–");
+  setText($("rssi"), f ? `${f.rssi} dBm` : "–");
+  setText($("level"), f ? f.level : "–");
+  const chip = $("level-chip");
+  if (chip.dataset.level !== (f ? f.level : "")) chip.dataset.level = f ? f.level : "";
+  setText($("energy"), f ? (f.energy != null ? `now ${f.energy.toFixed(1)}` : "calibrating") : "–");
+  const stale = $("stale");
+  let text = "";
+  let alert = true;
+  if (ever && conn !== "open") {
+    text = state.done ? "Session finished" : "⚠ Lost the recording session, retrying";
+    alert = !state.done;
+  } else if (state.failed) text = "⚠ Live view stopped; the recording continues in the terminal";
+  else if (conn === "open" && !state.done) {
+    const since = nowMs - (lastArrival ?? openedAt);
+    if (since > STALE_MS) text = `⚠ No packets for ${Math.floor(since / 1000)} s: is the SEND board powered?`;
+  }
+  stale.hidden = !text;
+  stale.classList.toggle("alert", alert);
+  setText(stale, text);
+}
+
+function tipRow(value, label) {
+  const div = document.createElement("div");
+  const b = document.createElement("b");
+  b.textContent = value;
+  div.append(b, document.createTextNode(` ${label}`));
+  return div;
+}
+
+const signedDb = (d) => `${d >= 0 ? "+" : ""}${d.toFixed(1)} dB`;
+
+function renderTip(now, hit) {
+  const tip = $("tip");
+  if (!hover || !hit || now == null) {
+    tip.hidden = true;
+    return;
+  }
+  const rows = [];
+  const near = [...state.clips.values()].filter((c) => c.go != null && Math.abs(hit.t - c.go) < 12);
+  const go = near.length ? near.reduce((a, b) => (Math.abs(hit.t - a.go) < Math.abs(hit.t - b.go) ? a : b)) : null;
+  const ago = now - hit.t;
+  const sign = go && hit.t >= go.go ? "+" : "−";
+  const fromGo = go ? `(GO ${sign}${Math.abs(hit.t - go.go).toFixed(1)} s, clip ${go.clip})` : "ago";
+  rows.push(tipRow(`−${ago.toFixed(1)} s`, fromGo));
+  const f = buffer.nearest(hit.t);
+  if (f && Math.abs(f.t - hit.t) < 0.2) {
+    rows.push(tipRow(f.energy != null ? f.energy.toFixed(1) : "–", `motion energy · ${f.level}`));
+    if (hover.id === "wave") {
+      const k = wave.laneAt(hover.clientY);
+      if (k != null && f.db) rows.push(tipRow(signedDb(f.db[k]), `subcarrier #${k} vs its median`));
+    } else if (hover.id === "heat") {
+      const k = heat.positionAt(hover.clientY);
+      if (k != null && f.row) {
+        rows.push(tipRow(f.row[k].toFixed(1), `amplitude, subcarrier #${k}`));
+        rows.push(tipRow(signedDb(f.db[k]), "vs its 20 s median"));
+      }
+    }
+  } else rows.push(tipRow("–", "no data here"));
+  tip.replaceChildren(...rows);
+  tip.hidden = false;
+  const left = hover.clientX + 16;
+  const topY = hover.clientY + 16;
+  tip.style.left = `${Math.min(left, window.innerWidth - tip.offsetWidth - 8)}px`;
+  tip.style.top = `${Math.min(topY, window.innerHeight - tip.offsetHeight - 8)}px`;
+}
+
+function marks() {
+  const cfg = state.cfg;
+  if (!cfg) return [];
+  return [...state.clips.values()].map((c) => ({ counts: c.counts, go: c.go, pre: cfg.pre_s, post: cfg.post_s }));
+}
+
+function loop() {
+  const nowMs = performance.now();
+  const now = buffer.now(nowMs) ?? state.lastT;
+  const hit = hover && now != null ? timeAtX(plots[hover.id], hover.clientX, now) : null;
+  const hx = hit ? hit.x : null;
+  const ms = marks();
+  wave.draw(now, ms, theme, hx);
+  heat.draw(now, ms, theme, hx);
+  energy.draw(now, ms, theme, hx, state.cfg);
+  shape.draw(theme);
+  renderCue(now);
+  drawTimeline(now);
+  renderChips(nowMs);
+  renderTip(now, hit);
+  requestAnimationFrame(loop);
+}
+
+function setMode(mode) {
+  heat.mode = mode;
+  for (const b of document.querySelectorAll(".toggle button")) {
+    b.setAttribute("aria-pressed", String(b.dataset.mode === mode));
+  }
+  drawScale($("scale"), theme, mode);
+  $("scale-lo").textContent = SCALE_LABELS[mode][0];
+  $("scale-hi").textContent = SCALE_LABELS[mode][1];
+  $("heat-note").textContent = HEAT_NOTES[mode];
+  try {
+    localStorage.setItem("heat-mode", mode);
+  } catch {}
+}
+
+function restyle() {
+  theme = readTheme();
+  tokens = readTokens();
+  heat.setTheme(theme);
+  drawScale($("scale"), theme, heat.mode);
+  if (state.cfg) for (const s of sparks) sparkline(s.canvas, s.frames, s.go, state.cfg, theme);
+}
+
+for (const b of document.querySelectorAll(".toggle button")) {
+  b.addEventListener("click", () => setMode(b.dataset.mode));
+}
+for (const [id, canvas] of Object.entries(plots)) {
+  canvas.addEventListener("pointermove", (e) => (hover = { id, clientX: e.clientX, clientY: e.clientY }));
+  canvas.addEventListener("pointerleave", () => (hover = null));
+}
+new ResizeObserver(() => {
+  layoutWord();
+  fitSub();
+}).observe($("phase"));
+watchTheme(restyle);
+heat.setTheme(theme);
+let mode = "amp";
+try {
+  mode = localStorage.getItem("heat-mode") === "change" ? "change" : "amp";
+} catch {}
+setMode(mode);
+connect(onMessage, onState);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

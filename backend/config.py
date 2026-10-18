@@ -2,7 +2,8 @@ from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
-SERIAL_PORT = None
+RECEIVERS = {"A": "80:B5:4E:F3:AF:20", "B": "80:B5:4E:F1:A4:BC"}
+SENDER_BOARD = "D0:CF:13:26:5E:18"
 ARDUINO_PORT = None
 
 CALIBRATE_S = 10.0

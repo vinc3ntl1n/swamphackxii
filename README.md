@@ -4,21 +4,22 @@ SwampHacks XII project. Detects falls in a room from how a person's movement dis
 
 ## How it works
 
-Two Seeed XIAO ESP32-S3 boards sit 3–4 m apart. One broadcasts Wi-Fi packets about 100 times a second. The other measures the **Channel State Information (CSI)** of each packet: how strongly each of its frequency subcarriers arrived (about 166 usable ones). A human body absorbs and reflects 2.4 GHz Wi-Fi, so when someone moves between the boards, those numbers change.
+Three Seeed XIAO ESP32-S3 boards make two links across the room. The sender broadcasts Wi-Fi packets about 100 times a second. Two receivers, A and B, each measure the **Channel State Information (CSI)** of every packet: how strongly each of its frequency subcarriers arrived (about 166 usable ones). A human body absorbs and reflects 2.4 GHz Wi-Fi, so when someone moves near the line between the sender and a receiver, that receiver's numbers change. The two lines fan out from the sender in a V, so which link reacts tells which part of the room the movement was in.
 
-The receiver streams CSI to a laptop over USB, where the Python backend:
+Both receivers stream CSI to a laptop over USB, where the Python backend:
 
-1. **Parses** each `CSI_DATA` line into an amplitude per subcarrier (`capture/csi.py`).
-2. **Measures motion energy**: how much the average signal shifted over the last 0.5 s, divided by an empty-room baseline learned during a 10 s calibration (`detection/motion.py`).
-3. **Cuts Motion Events**: a burst of movement from when energy crosses `T_ON` until it stays below `T_OFF` for 1 s.
-4. **Waits through a 4 s Stillness Window.** If the person moves again, it wasn't a fall.
+1. **Parses** each `CSI_DATA` line into an amplitude per subcarrier, tagged with the link it came from (`capture/csi.py`).
+2. **Measures motion energy** for each link separately: how much the average signal shifted over the last 0.5 s, divided by that link's empty-room baseline, learned during a 10 s calibration (`detection/motion.py`).
+3. **Cuts Motion Events**: a burst of movement on a link lasts from when its energy crosses `T_ON` until it stays below `T_OFF` for 1 s. Bursts on both links that overlap make one Motion Event, which ends once every link is quiet. The link with the strongest burst supplies the numbers for the next steps, and the log lists which links moved (`links A`, `links B` or `links A+B`) (`detection/pipeline.py`).
+4. **Waits through a 4 s Stillness Window.** If the person moves again on any link, it wasn't a fall.
 5. **Classifies** the event as walk, sit-down, or fall (`detection/features.py`, `detection/detector.py`). The key signals are how hard the signal moved (`peak`) and how different the room looks before vs. after (`static_change`): a body lying on the floor changes the room far more than one sitting in a chair.
 6. **Runs the fall flow** (`detection/fallflow.py`): a confirmed fall starts a 10 s countdown with an alarm. If nobody cancels, the caregiver is alerted.
 
 ```
-sender XIAO ──Wi-Fi──► receiver XIAO ──USB──► csi.py ► motion.py ► features.py ► detector.py ► fallflow.py
-                                                                                              │
-                                                                         alarm / cancel button / alert
+              ┌──► receiver A XIAO ──USB──┐
+sender XIAO ──┤ Wi-Fi                     ├──► csi.py ► motion.py ► features.py ► detector.py ► fallflow.py
+              └──► receiver B XIAO ──USB──┘                                                          │
+                                                                                       alarm / cancel button / alert
 ```
 
 Two detectors share the same interface:
@@ -30,11 +31,14 @@ Two detectors share the same interface:
 
 | Item | Role |
 |---|---|
-| XIAO ESP32-S3 + external antenna | Sender, running Espressif's [esp-csi](https://github.com/espressif/esp-csi) `csi_send` example |
-| XIAO ESP32-S3 + external antenna | Receiver, running `csi_recv`, plugged into the laptop |
+| XIAO ESP32-S3 + external antenna | Sender, running Espressif's [esp-csi](https://github.com/espressif/esp-csi) `csi_send` example. It only needs power, so a USB power bank works. |
+| XIAO ESP32-S3 + external antenna | Receiver A, running `csi_recv`, plugged into the laptop |
+| XIAO ESP32-S3 + external antenna | Receiver B, running `csi_recv`, plugged into the laptop |
 | Arduino + push button + buzzer | In-room cancel button and alarm (`arduino/cancel_button`) |
 
-Place the boards 3–4 m apart at waist height so the direct path crosses where a person would land.
+Put the boards at waist height with each receiver 3–4 m from the sender, so the two lines open 60–90° apart in a V from the sender. Each link is most sensitive close to its line, so run line A over the spot where a person would land and line B past the chair, and walk paths that cross both.
+
+To tell the boards apart over USB: a receiver prints `CSI_DATA` lines, and the sender's boot log says `Project name: csi_send`.
 
 **Arduino wiring:** button between pin 2 and GND (internal pull-up), buzzer + to pin 8 and − to GND. Serial at 9600 baud: it sends `CANCEL` when the button is pressed, and turns the alarm on/off on `A1` / `A0`.
 
@@ -51,10 +55,13 @@ idf.py set-target esp32s3 && idf.py -p /dev/cu.usbmodem<SENDER> flash
 
 cd ../csi_recv
 idf.py set-target esp32s3 && idf.py menuconfig
-idf.py -p /dev/cu.usbmodem<RECEIVER> flash
+idf.py -p /dev/cu.usbmodem<RECEIVER_A> flash
+idf.py -p /dev/cu.usbmodem<RECEIVER_B> flash
 ```
 
 In `menuconfig`, set **Component config → ESP System Settings → Channel for console output → USB Serial/JTAG Controller**. The XIAO's USB-C port is the chip's built-in USB, not a UART, so without this no CSI reaches the laptop.
+
+Before building `csi_recv`, delete the `esp_wifi_set_mac(WIFI_IF_STA, CONFIG_CSI_SEND_MAC)` line at the end of `wifi_init()` in `main/app_main.c`. It gives the receiver the sender's MAC address, and the receiver then drops the sender's packets. Both receivers run the same build.
 
 ## Running
 
@@ -63,19 +70,54 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run everything from the repo root with `python -m`. Each command auto-detects the receiver board, or takes `--port`.
+Run everything from the repo root with `python -m`. Each command finds the receivers by their USB serial numbers in `config.RECEIVERS`, so it doesn't matter which port each one is plugged into. The sender's serial number is in `config.SENDER_BOARD`, so it is skipped if it's on USB for power. If one receiver is missing, the command says so and runs on the other. `--port` (receiver A) and `--port-b` (receiver B) override the lookup.
 
 | Command | What it does |
 |---|---|
-| `python -m backend.capture.live` | Check capture: prints packet rate, subcarriers, RSSI and a motion bar. Saves the raw stream to `data/sessions/`. |
+| `python -m backend.capture.live` | Check capture: prints packet rate, subcarriers, RSSI and a motion bar for each receiver, once a second. Walking across one link's line should move only that link's bar. Saves the raw stream to `data/sessions/`. |
 | `python -m backend.run` | Full detection pipeline live in the terminal. Stay still for the first 10 s while it calibrates. |
 | `python -m backend.run --replay data/sessions/<file>.log --speed 0` | Same, on a saved session (`--speed 0` = as fast as possible). |
 | `python -m backend.capture.replay <log>` | Play a session log or Recording through the capture meter. |
-| `python -m backend.training.record fall --n 10` | Record 10 labeled clips: wait for 3-2-1-GO, move, hold still until "saved". Labels: `fall`, `sit-down`, `walk`, `empty`. Add `--split test` for the test set, `--recalibrate` after moving the boards. |
+| `python -m backend.training.record fall --n 10` | Record 10 labeled clips: wait for 3-2-1-GO, move, hold still until "saved". Labels: `fall`, `sit-down`, `walk`, `empty`. Add `--split test` for the test set, `--recalibrate` after moving the boards. Also opens the live record page at `http://127.0.0.1:8000/` (see below); `--no-view` turns it off, `--view-port 8001` moves it. |
 | `python -m backend.training.train` | Train the random forest on `data/recordings/train/`, score it on `data/recordings/test/` (or cross-validation if there's no test set), write `data/model.joblib` and `data/results.json`. |
 | `python -m backend.run --detector rf` | Use the trained model instead of the threshold rules. |
 
 All tunable numbers (thresholds, timings, ntfy topic) are in `backend/config.py`.
+
+Session logs and Recordings store one packet per line: `<laptop time>\t<link>\t<CSI_DATA line>`. Files from before the second receiver have no link column and read as link A, so the old Recordings still train as before. A Recording's `.json` keeps one calibration per link, and its `rate_hz` gives packets per second per link. `calibration.json` also keeps one calibration per link. `record.py` recalibrates when a receiver has none saved yet.
+
+### The live record page
+
+While `record.py` runs, a page in the browser shows when to move and what the Wi-Fi signal is doing, so the person performing the clips can follow it from 3–4 m away. If the port is busy the session prints a warning and records without the page. Reloading the page rebuilds it from the session so far, and the last minute of signal comes back.
+
+The **left half** is for the performer:
+
+- A huge phase word with a progress bar. `GET IN POSITION` (with seconds until the count), then `3`, `2`, `1` with **HOLD STILL** under them, then `GO!` with the action in violet, a color used for nothing else. About 2 s after GO it switches to `HOLD STILL / STAY DOWN` (fall), `HOLD STILL / STAY SEATED` (sit-down) or `KEEP WALKING` (walk) until the clip window ends. Empty-room clips never show `GO!`: they show `NOBODY MOVES` for the whole window. Then `✓ SAVED` in green, or the problem (`⚠ MOVED BEFORE GO`, `⚠ MOVED AT THE END`, …) in amber, with "do an extra". After the last clip that result stays up, with `DONE` and the session totals under it. Long cues wrap onto two lines so they stay big.
+- A red **WAIT FOR GO** banner when the live motion energy crosses `T_ON` during the 3-2-1 count. It clears below `T_OFF`. This is the same energy rule `record.py` later uses to flag "moved before GO". A third of the existing movement clips were flagged that way, because people start moving on "1".
+- The label's instruction, a timeline strip of the current clip (position, 3, 2, 1, GO, hold, saved) with a cursor and the recorded window under it, the last result, and the list of saved clips with each clip's energy around GO.
+
+The **right half** is the live signal, all on one time axis (newest at the right, last 20 s):
+
+- **Waveform**: 8 subcarriers drawn over time like a seismograph. Each lane shows how far that subcarrier is from its own median over the last 20 s, in dB, through a soft `tanh(d / 8 dB)` scale. An empty room gives nearly flat lines, and a person moving gives big swings. When someone blocks the path, the lanes dip together. The lanes are row positions 63, 88, 94, 108, 133, 141, 147 and 156 of the 166 usable subcarriers. Across the 58 labeled clips they react most to movement while staying the least alike. With any other row width the lanes are spread evenly.
+- **Subcarrier heatmap**: time across, subcarrier up. *Amplitude* colors the raw level (0–110). *Change* colors the dB difference from each subcarrier's 20 s median, so movement and the Room Change after a fall stand out (red = signal dropped).
+- **Motion energy** with dashed `T_ON` / `T_OFF` lines.
+- **CSI shape**: amplitude across subcarriers for the last 0.5 s, fading.
+- Markers for 3, 2, 1 and GO run down through the time charts, along with the window `[GO − 1.5 s, GO + 8.5 s]` that goes into the Recording. The window is shaded on the waveform and energy charts and drawn as edge lines on the heatmap, so its colors stay true. Chips show LIVE/REPLAY, packets per second, RSSI and the Motion Level. A warning appears when no packets have arrived for 2 s.
+
+With two receivers, the page shows link A's signal, or link B's if A isn't plugged in. The Recording still saves both links.
+
+The page's clock is the packet time, not the computer's, so the marks line up with the signal in replays too. `backend/server.py` and `web/signal.js` don't depend on `record.py`, so the dashboard can reuse them. The server sends JSON over `/ws`:
+
+```json
+{"type":"source","mode":"LIVE"}
+{"type":"config","t_on":7.0,"t_off":5.5,"pre_s":1.5,"post_s":8.5,"calibrate_s":10.0}
+{"type":"frame","t":1792217330.1,"energy":1.2,"level":"no motion","row":[...166 amplitudes...],"rssi":-47,"hz":79.4}
+{"type":"record","phase":"position","t":...,"clip":1,"n":10,"label":"fall","until":...}
+```
+
+`frame` comes 20 times a second: the rows of every packet in a 50 ms slot, averaged. `record` phases are `calibrating`, `position`, `count` (`word`), `go`, `saved` (`file`, `seen`, `problems`, `go_t`) and `done` (`clean`, `flagged`, `stopped`). `failed` (`error`) means the page itself broke while recording carried on. A page that connects late first gets the latest `source` and `config`, every `record` so far, and the last 60 s of `frame`s.
+
+`record.py` waits for the first packet before it starts, so a slow serial start no longer eats clip 1's get-in-position time. If the packet stream ends (a replay running out), it stops with a message instead of hanging. On Ctrl-C it exits quietly and the page shows `STOPPED`. Packets of an unexpected size are left out of the page once a calibration is loaded, so one stray packet can't reset the charts. If the page itself breaks, the terminal says so once, the page shows `VIEW STOPPED`, and the recording carries on.
 
 ## Layout
 
@@ -83,6 +125,7 @@ All tunable numbers (thresholds, timings, ntfy topic) are in `backend/config.py`
 backend/
   config.py            all tunable numbers and the data folder location
   run.py               terminal front end for the pipeline
+  server.py            live page server: WebSocket hub, 20 Hz signal feed, static files
   capture/             getting CSI from the board into Frames
     csi.py             parse CSI lines, read logs
     live.py            read the receiver over USB, save sessions
@@ -98,6 +141,10 @@ backend/
     recordings.py      save/load labeled Recordings
     record.py          record labeled clips
     train.py           train and evaluate the random forest
+web/
+  record.html          live record page (timing cues + signal)
+  signal.js            waveform, heatmap, energy and CSI-shape charts, reusable for the dashboard
+  style.css            colors (light and dark) and layout
 arduino/
   cancel_button/       cancel button + buzzer sketch
 data/
@@ -110,4 +157,6 @@ data/
 
 ## Status
 
-Working: capture, replay, motion detection, both detectors, the fall flow, recording and training. Not built yet: the web dashboard, ntfy phone alerts, and the Python side of the Arduino link. The pipeline currently prints the alarm and alerts to the console.
+Working: capture, replay, motion detection, both detectors, the fall flow, recording (with the live record page) and training. Not built yet: the web dashboard (`backend/server.py` and `web/signal.js` are its first pieces), ntfy phone alerts, and the Python side of the Arduino link. The pipeline currently prints the alarm and alerts to the console.
+
+Both receivers are read together, with motion, calibration and Motion Events per link, in the terminal pipeline, the capture check, replay and `record.py`. `train.py` takes features from the strongest link in each two-link clip, the same way the live pipeline does. Not built yet: a room-area view and a record page that shows both links. The detector was tuned and trained on link A clips only, so it hasn't been checked on falls seen by link B yet.

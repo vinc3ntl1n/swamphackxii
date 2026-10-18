@@ -8,7 +8,8 @@ from backend.capture.csi import Frame
 
 
 class Meter:
-    def __init__(self, window_s: float = 0.5, every_s: float = 1.0):
+    def __init__(self, name: str = "", window_s: float = 0.5, every_s: float = 1.0):
+        self.name = name
         self.window_s = window_s
         self.every_s = every_s
         self.recent: deque[Frame] = deque()
@@ -46,7 +47,8 @@ class Meter:
 
     def _print(self, rate: float, rssi: int) -> None:
         motion, subcarriers = self._motion()
-        head = f"{rate:6.1f} Hz | {subcarriers:3d} subcarriers | rssi {rssi:4d} dBm | motion"
+        prefix = f"{self.name} " if self.name else ""
+        head = f"{prefix}{rate:6.1f} Hz | {subcarriers:3d} subcarriers | rssi {rssi:4d} dBm | motion"
         if motion is None:
             print(f"{head}    -- (too few packets)", flush=True)
             return
