@@ -44,24 +44,6 @@ body {
   font-size: 15px;
 }
 
-.demo {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  padding: 3px 4px 3px 12px;
-  border: 1px dashed var(--axis);
-  border-radius: 999px;
-}
-
-.demo-label {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
 button.chip {
   font: inherit;
   font-size: 15px;
@@ -691,8 +673,7 @@ body.friendly-page .toggle button[aria-pressed="true"] {
   color: #ffffff;
 }
 
-body.friendly-page .chip,
-body.friendly-page .demo {
+body.friendly-page .chip {
   font-family: inherit;
   background: rgba(255, 255, 255, 0.8);
 }
@@ -1060,16 +1041,52 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: #eef7f0;
-  font-size: 20px;
+  background: #f0f3f1;
+  color: var(--ink-2);
+}
+
+.act-icon svg,
+.btn-icon {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .activity-list li[data-tone="bad"] .act-icon {
   background: var(--urgent-wash);
+  color: var(--urgent);
 }
 
 .activity-list li[data-tone="good"] .act-icon {
   background: #e1f5e6;
+  color: var(--calm);
+}
+
+.pill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.chip.simulate {
+  margin-left: auto;
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.chip.simulate:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.chip.sound {
+  margin-left: 0;
 }
 
 .act-body {
@@ -1104,12 +1121,6 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
 .activity-list li[data-status="failed"] .act-status,
 .activity-list li[data-status="not_delivered"] .act-status {
   color: var(--urgent);
-}
-
-.act-tag {
-  padding: 0 8px;
-  border-radius: 999px;
-  background: #f0f2f0;
 }
 
 .activity-empty {
@@ -1244,9 +1255,5 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
   .soft-card.activity {
     flex: 0 0 auto;
     max-height: 60vh;
-  }
-
-  .demo {
-    margin-left: 0;
   }
 }

@@ -47,10 +47,7 @@
     <button type="button" data-view="resident">Resident</button>
     <button type="button" data-view="dev">Dev</button>
   </div>
-  <span class="demo">
-    <span class="demo-label" id="source">Demo</span>
-    <button type="button" class="chip" id="simulate" disabled>Simulate fall</button>
-  </span>
+  <button type="button" class="chip simulate" id="simulate" disabled>Simulate fall</button>
   <button type="button" class="chip sound" id="sound"></button>
 </header>
 
@@ -72,7 +69,7 @@
         <button type="button" class="pill-btn main" id="cg-cancel" hidden>Cancel the alert</button>
         <button type="button" class="pill-btn main" id="cg-handled" hidden>I've handled it</button>
         <button type="button" class="pill-btn" id="cg-false" hidden>It was a false alarm</button>
-        <a class="pill-btn" id="cg-call" hidden>📞 Call them</a>
+        <a class="pill-btn" id="cg-call" hidden><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"></path></svg>Call them</a>
       </div>
     </div>
   </section>
@@ -193,6 +190,16 @@ const NOTICE = {
   all_clear: "All-clear to the Caregiver", help: "Help Request to the Caregiver",
 };
 const DELIVERY = { sending: "sending…", sent: "✓ sent", failed: "✗ failed", not_delivered: "✗ not delivered" };
+const ICONS = {
+  alert: '<path d="M12 4 L21 19 H3 Z"></path><path d="M12 10v4"></path><path d="M12 16.5v.5"></path>',
+  message: '<path d="M4 5h16v11H10l-5 4v-4H4z"></path>',
+  bell: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"></path><path d="M10 20.5a2 2 0 0 0 4 0"></path>',
+  heart: '<path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20z"></path>',
+  cross: '<path d="M7 7l10 10"></path><path d="M17 7L7 17"></path>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"></path>',
+  help: '<circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5v5.5"></path><path d="M12 16v.5"></path>',
+  phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"></path>',
+};
 const FRIENDLY_DELIVERY = { sending: "sending…", sent: "delivered", failed: "couldn't send", not_delivered: "not delivered" };
 const HISTORY_TEXT = {
   confirmed_fall: (e) => `Confirmed Fall #${e.fall} · link ${e.links}${e.details ? ` · peak ${e.details.peak} · room change ${e.details.static_change}` : ""}`,
@@ -355,7 +362,7 @@ function onEvent(ev) {
 }
 
 function noticeText(n, status) {
-  return `📣 ${NOTICE[n.kind] ?? n.kind} · ${DELIVERY[status] ?? status}`;
+  return `${NOTICE[n.kind] ?? n.kind} · ${DELIVERY[status] ?? status}`;
 }
 
 function onNotify(n) {
@@ -389,22 +396,22 @@ function friendly(e) {
   const they = name || "They";
   const them = name || "them";
   switch (e.what) {
-    case "confirmed_fall": return { icon: "⚠️", tone: "bad", text: name ? `A fall was detected for ${name}` : "A fall was detected" };
+    case "confirmed_fall": return { icon: "alert", tone: "bad", text: name ? `A fall was detected for ${name}` : "A fall was detected" };
     case "notify":
-      if (e.kind === "check_in") return { icon: "💬", tone: "info", text: `Asked ${them} “Are you OK?”`, status: true };
-      if (e.kind === "alert") return { icon: "🔔", tone: "bad", text: "You were alerted", status: true };
+      if (e.kind === "check_in") return { icon: "message", tone: "info", text: `Asked ${them} “Are you OK?”`, status: true };
+      if (e.kind === "alert") return { icon: "bell", tone: "bad", text: "You were alerted", status: true };
       return null;
     case "countdown_cancelled":
       return e.by === "resident"
-        ? { icon: "💚", tone: "good", text: `${they} said they're OK` }
-        : { icon: "✋", tone: "info", text: "You cancelled the alert" };
-    case "late_answer": return { icon: "💚", tone: "good", text: `${they} said they're OK (after the alert)` };
+        ? { icon: "heart", tone: "good", text: `${they} said they're OK` }
+        : { icon: "cross", tone: "info", text: "You cancelled the alert" };
+    case "late_answer": return { icon: "heart", tone: "good", text: `${they} said they're OK (after the alert)` };
     case "resolved":
       return e.reason === "false_alarm"
-        ? { icon: "👍", tone: "info", text: "You marked it a false alarm" }
-        : { icon: "✅", tone: "good", text: "You marked it handled" };
-    case "help_request": return { icon: "🆘", tone: "bad", text: `${they} asked for help` };
-    case "called": return { icon: "📞", tone: "info", text: `You called ${them}` };
+        ? { icon: "check", tone: "info", text: "You marked it a false alarm" }
+        : { icon: "check", tone: "good", text: "You marked it handled" };
+    case "help_request": return { icon: "help", tone: "bad", text: `${they} asked for help` };
+    case "called": return { icon: "phone", tone: "info", text: `You called ${them}` };
     default: return null;
   }
 }
@@ -416,7 +423,7 @@ function addActivity(e) {
   li.dataset.tone = f.tone;
   const icon = document.createElement("span");
   icon.className = "act-icon";
-  icon.textContent = f.icon;
+  icon.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[f.icon]}</svg>`;
   const body = document.createElement("div");
   body.className = "act-body";
   const text = document.createElement("span");
@@ -433,12 +440,6 @@ function addActivity(e) {
     status.textContent = FRIENDLY_DELIVERY[e.status] ?? e.status;
     meta.append(status);
     li.dataset.status = e.status;
-  }
-  if (e.mode && e.mode !== "live") {
-    const tag = document.createElement("span");
-    tag.className = "act-tag";
-    tag.textContent = e.mode === "sim" ? "practice" : "replay";
-    meta.append(tag);
   }
   body.append(text, meta);
   li.append(icon, body);
@@ -673,7 +674,7 @@ function careFor(nowMs) {
   }
   if (!live.length && !(st.state && st.state.sim)) {
     return st.ended
-      ? { tone: "calm", mood: "happy", pill: "Demo", word: "All is well", sub: "The replay has finished. Try Simulate fall." }
+      ? { tone: "calm", mood: "happy", pill: "Watching", word: "All is well", sub: "The room is calm. No falls detected." }
       : { tone: "offline", mood: "worried", pill: "Sensors offline", word: "Can't see the room", sub: "No signal from the sensors. Are they plugged in?" };
   }
   const moving = live.some((l) => l.buf.latest()?.level === "moving");
@@ -685,7 +686,7 @@ function renderCare(nowMs) {
   const card = $("cg-card");
   if (card.dataset.tone !== c.tone) card.dataset.tone = c.tone;
   gator($("cg-gator"), c.mood);
-  setText($("cg-pill"), st.simTag && c.tone !== "calm" ? `${c.pill} · practice` : c.pill);
+  setText($("cg-pill"), c.pill);
   setText($("cg-word"), c.word);
   setText($("cg-sub"), c.sub);
   show($("cg-timer"), !!c.timer);
@@ -744,15 +745,7 @@ function renderMap(nowMs) {
   }
 }
 
-function sourceText() {
-  if (!st.source) return "Demo";
-  if (st.source === "LIVE") return "Live";
-  return st.ended ? "Replay · ended" : "Replay";
-}
-
 function renderChips(nowMs) {
-  const source = $("source");
-  setText(source, sourceText());
   setText($("dev-source"), st.source ? (st.ended ? `${st.source} · ended` : st.source) : "–");
   for (const l of links.values()) {
     let chip = $(`chip-${l.name}`);
@@ -768,11 +761,11 @@ function renderChips(nowMs) {
   }
   const stale = $("stale");
   let text = "";
-  if (ever && conn !== "open") text = "⚠ Lost the connection to run.py, retrying";
+  if (ever && conn !== "open") text = "Lost the connection to run.py, retrying";
   else if (conn === "open" && !st.ended) {
     const last = Math.max(openedAt, ...[...links.values()].map((l) => l.arrival ?? 0));
     const since = nowMs - last;
-    if (since > STALE_MS) text = `⚠ No packets for ${Math.floor(since / 1000)} s: is the SEND board powered?`;
+    if (since > STALE_MS) text = `No packets for ${Math.floor(since / 1000)} s: is the SEND board powered?`;
   }
   stale.hidden = !text;
   setText(stale, text);
@@ -885,7 +878,7 @@ function renderSound() {
   const btn = $("sound");
   if (btn.dataset.sound !== mode) {
     btn.dataset.sound = mode;
-    btn.textContent = { muted: "🔇 Alarm muted", on: "🔊 Alarm on", blocked: "🔊 Turn on alarm sound" }[mode];
+    btn.textContent = { muted: "Alarm sound off", on: "Alarm sound on", blocked: "Turn on alarm sound" }[mode];
     btn.setAttribute("aria-pressed", String(!muted));
   }
 }
