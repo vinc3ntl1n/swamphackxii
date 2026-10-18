@@ -954,6 +954,14 @@ function setText(el, text) {
   if (el.textContent !== text) el.textContent = text;
 }
 
+// Shrink a one-line title until it fits its box; clearing the inline size first lets it grow back.
+function fitLine(el) {
+  el.style.fontSize = "";
+  if (!el.clientWidth) return;
+  const over = el.scrollWidth / el.clientWidth;
+  if (over > 1) el.style.fontSize = `${Math.floor(parseFloat(getComputedStyle(el).fontSize) / over)}px`;
+}
+
 function show(el, on) {
   if (el.hidden === on) el.hidden = !on;
 }
@@ -1128,6 +1136,9 @@ function renderFalls() {
   show($("falls-note"), all.length > SUMMARIES_SHOWN);
 }
 
+new ResizeObserver(() => fitLine($("cg-word"))).observe($("cg-card"));
+document.fonts.ready.then(() => fitLine($("cg-word")));
+
 function renderCare(nowMs) {
   const c = careFor(nowMs);
   const card = $("cg-card");
@@ -1137,7 +1148,10 @@ function renderCare(nowMs) {
   setText($("cg-pill"), c.pill);
   show($("cg-flag"), !!c.flag);
   if (c.flag) setText($("cg-flag"), c.flag);
-  setText($("cg-word"), c.word);
+  if ($("cg-word").textContent !== c.word) {
+    setText($("cg-word"), c.word);
+    fitLine($("cg-word"));
+  }
   setText($("cg-sub"), c.sub);
   show($("cg-timer"), !!c.timer);
   if (c.timer) {

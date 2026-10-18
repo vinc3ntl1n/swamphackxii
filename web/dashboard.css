@@ -971,7 +971,7 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  max-width: 560px;
+  max-width: min(560px, 100%);
 }
 
 .care-pill {
@@ -1022,9 +1022,12 @@ body.friendly-page .chip.sound[data-sound="blocked"] {
 
 .care-word {
   margin: 0;
+  max-width: 100%;
   font-size: clamp(30px, min(6.5vh, 6vw), 64px);
   font-weight: 900;
   line-height: 1.08;
+  /* Always one line; fitLine() in dashboard.html shrinks the font when a long name would overflow. */
+  white-space: nowrap;
 }
 
 .care-sub {
