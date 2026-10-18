@@ -4,9 +4,10 @@ import contextlib
 import io
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -17,6 +18,7 @@ from backend.detection.detector import Verdict
 from backend.detection.fallflow import COUNTDOWN, IDLE
 from backend.detection.motion import MotionTracker
 from backend.detection.pipeline import Pipeline
+from backend.live_runtime import TerminalRuntime
 
 
 BASE = 1000.0
@@ -37,6 +39,34 @@ class DetectorSpy:
 
 
 class LiveCliHealthTests(unittest.TestCase):
+    def test_terminal_lock_wait_cannot_make_old_capture_look_fresh(self):
+        pipe = Pipeline(Mock(), DetectorSpy())
+        tracker = pipe.trackers["A"] = MotionTracker("A")
+        tracker.load_calibration(CAL)
+        runtime = TerminalRuntime(pipe, links=("A",), live_age=True)
+        started, result, clock = threading.Event(), [], [BASE]
+
+        def process():
+            started.set()
+            result.append(runtime.process(Frame(BASE, -40, np.ones(2), "A")))
+
+        with patch("backend.live_runtime.time.time", side_effect=lambda: clock[0]):
+            with runtime.lock:
+                worker = threading.Thread(target=process)
+                worker.start()
+                self.assertTrue(started.wait(1))
+                clock[0] = BASE + 0.8
+            worker.join(1)
+        self.assertFalse(worker.is_alive())
+        info, verdict = result[0]
+        self.assertEqual(info.reason, "stale_capture")
+        self.assertIsNone(info.energy)
+        self.assertIsNone(info.amp)
+        self.assertIsNone(verdict)
+        self.assertFalse(pipe.detector.inputs)
+        self.assertFalse(runtime.sensors.seen)
+        self.assertIsNone(runtime.clock.t)
+
     def exercise(self, mode):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -46,6 +76,7 @@ class LiveCliHealthTests(unittest.TestCase):
         model_path.write_bytes(b"controlled detector artifact for startup provenance")
         detector = DetectorSpy()
         timeline, pipes, closed = [], [], []
+        clock = [BASE]
 
         def make_pipeline(sink, selected):
             self.assertIs(selected, detector)
@@ -64,7 +95,7 @@ class LiveCliHealthTests(unittest.TestCase):
             pipes.append(pipe)
             return pipe
 
-        def frames(ports, log_path, *, health_callback):
+        def frames(ports, log_path, stop=None, *, health_callback):
             def health(*, idle=False, dropped=0):
                 row = {"type": "capture_health", "idle": idle,
                        "capture_wall_t": BASE + 9, "capture_age_ms": 0,
@@ -77,6 +108,7 @@ class LiveCliHealthTests(unittest.TestCase):
             try:
                 health()
                 for n in range(71):
+                    clock[0] = BASE + n / 10
                     if mode == "drop" and n == 37:
                         health(dropped=2)
                     yield Frame(BASE + n / 10, -40, np.full(2, 10.0), "A")
@@ -97,6 +129,7 @@ class LiveCliHealthTests(unittest.TestCase):
                 patch.object(live, "live_frames", side_effect=frames), \
                 patch.object(run, "Pipeline", side_effect=make_pipeline), \
                 patch.object(run.detector, "make", return_value=detector), \
+                patch("backend.live_runtime.time.time", side_effect=lambda: clock[0]), \
                 patch("backend.detection.motion.raw_energy", side_effect=energy), \
                 patch.object(run, "start_view") as start_view, \
                 contextlib.redirect_stdout(io.StringIO()) as output:

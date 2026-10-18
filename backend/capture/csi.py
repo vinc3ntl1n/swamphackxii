@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import gzip
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -20,21 +21,29 @@ class Frame:
 
 
 def parse_line(line: str, t: float, link: str = DEFAULT_LINK) -> Frame | None:
-    if not line.startswith("CSI_DATA"):
+    if not line.startswith("CSI_DATA") or not math.isfinite(t):
         return None
     try:
-        fields = next(csv.reader([line.strip()]))
+        fields = next(csv.reader([line.strip()], strict=True))
+        if len(fields) < 6 or fields[0] != "CSI_DATA":
+            return None
         rssi = int(fields[3])
         first_word_invalid = int(fields[-2])
-        raw = np.array([int(v) for v in fields[-1].strip("[]").split(",") if v.strip()],
+        values = fields[-1].strip()
+        if first_word_invalid not in (0, 1) or not (values.startswith("[") and values.endswith("]")):
+            return None
+        raw = np.array([int(v) for v in values[1:-1].split(",")],
                        dtype=np.float32)
-    except (ValueError, IndexError, StopIteration):
+    except (ValueError, OverflowError, IndexError, StopIteration, csv.Error):
+        return None
+    if raw.size == 0 or raw.size % 2 or not np.isfinite(raw).all():
         return None
     if first_word_invalid:
         raw[:4] = 0
     n = raw.size // 2
     imag, real = raw[0:2 * n:2], raw[1:2 * n:2]
-    return Frame(t=t, rssi=rssi, amp=np.hypot(imag, real), link=link)
+    amp = np.hypot(imag, real)
+    return Frame(t=t, rssi=rssi, amp=amp, link=link) if np.isfinite(amp).all() else None
 
 
 def log_row(t: float, link: str, line: str) -> str:

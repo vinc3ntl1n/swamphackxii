@@ -103,6 +103,39 @@ class PacketBufferTests(unittest.TestCase):
 
 
 class LiveCaptureTests(unittest.TestCase):
+    def test_slow_health_callback_cannot_deliver_an_expired_packet(self):
+        stop = threading.Event()
+        reports, buffers = [], []
+        clock = [10.0]
+
+        def producer(link, port, out, stop):
+            buffers.append(out)
+            out.put(packet(100, 10))
+            stop.wait()
+
+        def health_callback(health):
+            reports.append(health)
+            if len(reports) == 1:
+                # A blocking log write/dashboard callback lets the queued frame
+                # expire while the serial reader keeps receiving newer frames.
+                clock[0] = 10.6
+                buffers[0].put(packet(101, 10.6))
+
+        with patch.object(live, "_read_port", producer), \
+                patch.object(live.time, "monotonic", side_effect=lambda: clock[0]), \
+                self.assertLogs(live.LOGGER, level="WARNING"):
+            # Third positional stop remains compatible with the live runtime.
+            frames = live.live_frames({"A": "fake"}, None, stop,
+                                      health_callback=health_callback)
+            try:
+                self.assertEqual(next(frames).t, 101)
+                self.assertEqual(len(reports), 2)
+                self.assertEqual(reports[1]["dropped_since_report"], 1)
+                self.assertEqual(reports[1]["last_drop"]["capture_t"], 100)
+                self.assertEqual(reports[1]["dropped_links"], ["A"])
+            finally:
+                frames.close()
+
     def test_age_drops_are_batched_and_reported_before_next_kept_frame(self):
         stop = threading.Event()
         reports = []

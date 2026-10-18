@@ -86,13 +86,16 @@ class _PacketBuffer:
 
     def get(self, timeout: float) -> _Packet | None:
         packet = self.queue.get(timeout=timeout)
+        return packet if self.fresh(packet) else None
+
+    def fresh(self, packet: _Packet) -> bool:
         with self.lock:
             now = time.monotonic()
             if self.max_age_s is not None and now - packet.received_mono > self.max_age_s:
                 self._drop(packet, "packet_age", now)
-                return None
+                return False
             self.last_received_mono = packet.received_mono
-        return packet
+            return True
 
     def report(self, *, idle: bool = False) -> None:
         with self.lock:
@@ -193,6 +196,10 @@ def _live_packets(ports: dict[str, str], log_path: Path | None = None,
             if packet is not None:
                 if max_queue_frames or health_callback:
                     out.report()
+                # Diagnostic writes and the health callback may wait on a slow
+                # disk or dashboard lock. Recheck at the delivery boundary too.
+                if not out.fresh(packet):
+                    continue
                 yield packet
         if out.log_error is not None:
             raise OSError(f"Unable to write raw CSI session log {log_path}") from out.log_error
@@ -212,8 +219,8 @@ def live_lines(ports: dict[str, str], log_path: Path | None = None,
         yield packet.frame.t, packet.frame.link, packet.line
 
 
-def live_frames(ports: dict[str, str], log_path: Path | None = None, *,
-                stop: threading.Event | None = None,
+def live_frames(ports: dict[str, str], log_path: Path | None = None,
+                stop: threading.Event | None = None, *,
                 health_callback: Callable[[dict], None] | None = None) -> Iterator[Frame]:
     """Bounded, fresh frames for detection; the raw session log retains all rows."""
     for packet in _live_packets(ports, log_path, stop, max_queue_frames=LIVE_QUEUE_FRAMES,

@@ -1,0 +1,5 @@
+# Shared RF artifacts were trained with these versions. Use Python 3.12;
+# NumPy 2.1.3 does not support the repository's existing Python 3.14 environment.
+-r requirements.txt
+numpy==2.1.3
+scikit-learn==1.6.1

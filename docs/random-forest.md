@@ -3,6 +3,37 @@
 Train offline after syncing recordings, then load the saved forest once when
 starting the live detector. Live predictions do not retrain it.
 
+Live detection defaults to RF. The model must be a trusted local file; prediction
+does not access R2 or a database. Set `SWAMP_RF_MODEL` in the repository's `.env`
+or pass `--model` to select the copied artifact. Paths from another teammate's
+machine need a local copy rather than the same absolute pathname.
+
+```bash
+# .env (or export these variables in the shell)
+SWAMP_DETECTOR=rf
+SWAMP_RF_MODEL=data/experiments/batch-20261017-233929/baseline.joblib
+```
+
+`SWAMP_DETECTOR=threshold` or `--detector threshold` explicitly selects the
+heuristic. A missing, malformed or incompatible requested RF stops startup;
+it never silently selects the heuristic.
+
+The shared baseline and threshold-035 artifacts were saved with scikit-learn
+1.6.1 and NumPy 2.1.3. Create a separate compatible environment (these pinned
+versions do not support Python 3.14):
+
+```bash
+python3.12 -m venv .venv-rf
+source .venv-rf/bin/activate
+python -m pip install -r requirements-rf.txt
+python -m backend.run --model data/experiments/batch-20261017-233929/baseline.joblib
+```
+
+Startup rejects declared library-version mismatches and scikit-learn's
+inconsistent-version pickle warning. Versionless legacy bundles remain readable
+when scikit-learn can load them without a compatibility warning. Re-evaluate a
+retrained model before substituting it for the shared baseline.
+
 ```bash
 python -m backend.training.validate --report /tmp/csi-validation.json
 python -m backend.training.train
@@ -107,6 +138,9 @@ loads that threshold automatically and uses the same decision function as
 offline evaluation. Legacy bundles without a threshold continue to use argmax.
 The returned confidence is the selected class's vote probability; verdict
 details separately expose `fall_probability`.
+Verdict details include all six feature values in order (`peak`, `static_change`,
+`duration_s`, `mean_energy`, `time_to_peak_s`, `stop_s`) and `class_probabilities`.
+These probabilities are model scores, not calibrated real-world risk estimates.
 
 Feature names/order and saved preprocessing settings must match the running
 code. Retrain after changing either. Compare reports before replacing the
@@ -126,5 +160,44 @@ automatically preloaded only for replay inputs.
 The dashboard's recording replay adds a synthetic tail so its stillness window
 can finish. This is a demo playback behavior, not additional measured evidence.
 Training validation and the raw-clip experiments do not add that synthetic data.
+
+## Diagnosing live misses
+
+Each live run saves `data/sessions/<timestamp>.log` and a matching
+`<timestamp>.events.jsonl`. The terminal prints both paths. Raw logs retain every
+valid row read from serial, including packets skipped by live detection. Training
+capture remains lossless. To choose the diagnostics path, add
+`--diagnostics /tmp/rf-events.jsonl`; replay writes diagnostics only when this flag
+is supplied.
+
+Live detection keeps at most 256 queued packets and discards packets older than
+0.5 seconds. Known capture loss clears affected motion windows and pending
+evidence before another packet is classified. A receiver without valid frames
+for 2 seconds cannot stay stuck in `moving` and block a healthy receiver. Live
+receiver suspension requires calibration when it returns; short gaps first warm
+fresh motion windows. Missing packets never count as stillness. Confirmed
+countdowns continue during signal loss.
+
+The JSONL records explain each stage:
+
+- `run_started`: selected artifact, checksum, saved threshold and feature order.
+- `capture_health`: queue depth, packet age, dropped counts/reasons/links.
+- `runtime`: receiver health, processing time, pending candidate and alert state.
+- `detection`: motion starts/ends, `waiting_for_quiet`, `candidate_started`,
+  `resumed_movement`, packet gaps, missing post-event observations, stale links,
+  or `classified` with the six RF inputs, probabilities and inference time.
+
+For a missed fall, first check whether motion started, then whether a candidate
+was created, then whether `classified` occurred. A missing classification with
+a rejection reason is a pipeline issue; a non-fall RF verdict has its model
+inputs and scores recorded. An event with no motion start can be investigated
+in the raw CSI and runtime energy samples. Packet age measures time since the
+laptop read the serial row; it cannot measure bytes already buffered in the
+receiver or USB driver.
+
+These fixes do not change the saved forest or its prediction rule. The existing
+stillness delay and rejection when movement resumes still apply and are now
+visible in diagnostics. Replaying recordings verifies integration, but a live
+receiver test is still needed to check USB behavior and room conditions.
 
 Only load trusted local joblib artifacts.

@@ -30,11 +30,16 @@ class Pipeline:
         self.after: list[tuple[float, np.ndarray]] = []
         self._issues: dict[str, str] = {}
         self._waiting_links: tuple[str, ...] = ()
+        self.suspended: set[str] = set()
 
-    def calibrate(self) -> None:
+    def calibrate(self, t: float | None = None) -> None:
         for tracker in self.trackers.values():
             tracker.calibrate()
-        self.ended, self.pending, self.after = {}, None, []
+        now = t if t is not None else self.flow.started or 0.0
+        if self.pending is not None:
+            self._abort(now, "recalibrated")
+        self.ended = {}
+        self._discard_candidate(now)
         self._issues.clear()
         self._waiting_links = ()
 
@@ -43,7 +48,8 @@ class Pipeline:
         status = {}
         for link, tracker in self.trackers.items():
             age = None if tracker.last_valid_t is None else max(0.0, t - tracker.last_valid_t)
-            if tracker.level == STALE or (age is not None and age >= RECEIVER_STALE_S):
+            if (link in self.suspended or tracker.level == STALE
+                    or (age is not None and age >= RECEIVER_STALE_S)):
                 state = "stale"
             elif tracker.baseline is None:
                 state = "calibrating"
@@ -52,7 +58,10 @@ class Pipeline:
             else:
                 state = "ok"
             status[link] = {"status": state, "last_valid_t": tracker.last_valid_t,
-                            "last_energy_t": tracker.last_energy_t, "age_s": age}
+                            "last_energy_t": tracker.last_energy_t, "age_s": age,
+                            "level": tracker.level,
+                            "energy": tracker.energy if state == "ok" else None,
+                            "baseline": tracker.baseline}
         return status
 
     def tick(self, t: float) -> None:
@@ -86,18 +95,46 @@ class Pipeline:
         if self.pending is not None and self.pending.link in affected:
             self._abort(t, "selected_receiver_capture_gap")
 
+    def suspend_link(self, link: str, t: float) -> bool:
+        """Invalidate a lost live signal; require fresh calibration when it returns.
+
+        Call this from live-source health monitoring, never to pad a replay or to
+        infer stillness from missing packets. Confirmed fall countdowns continue.
+        """
+        tracker = self.trackers.get(link)
+        if tracker is None or link in self.suspended:
+            return False
+        self.suspended.add(link)
+        # Losing B must not erase A's real completed event. It may continue
+        # in degraded mode if A can supply a complete observation itself.
+        self.ended.pop(link, None)
+        tracker.calibrate()
+        if self.pending is not None and link in self.links.split("+"):
+            self._abort(t, "selected_receiver_stale" if link == self.pending.link
+                        else "participating_receiver_stale")
+        self._diagnostic(t, "receiver_suspended", link,
+                         "live signal lost; fresh calibration required on return")
+        self.sink.log(t, f"Link {link} signal lost; recalibrating when packets resume")
+        return True
+
+    def _discard_candidate(self, t: float) -> None:
+        self.pending, self.after, self.links, self.deadline = None, [], "", 0.0
+        self.flow.not_a_fall(t)
+
     def process(self, frame: Frame) -> tuple[FrameInfo, tuple[MotionEvent, Verdict] | None]:
         self.tick(frame.t)
         tracker = self.trackers.get(frame.link)
         if tracker is None:
             tracker = self.trackers[frame.link] = MotionTracker(frame.link)
-        was_stale = tracker.level == STALE
+        was_stale = tracker.level == STALE or frame.link in self.suspended
         previous_level = tracker.level
         last_valid_t = tracker.last_valid_t
         was_calibrating = tracker.level == CALIBRATING
         info, event = tracker.update(frame)
         valid = tracker.last_valid_t == frame.t and info.reason not in (
             "invalid_amplitude", "wrong_frame_size")
+        if valid:
+            self.suspended.discard(frame.link)
         if valid and last_valid_t is not None and frame.t - last_valid_t > PACKET_GAP_S:
             self._diagnostic(info.t, "packet_gap", frame.link,
                              f"gap_s={frame.t - last_valid_t:.3f}; incomplete event discarded")
@@ -130,7 +167,8 @@ class Pipeline:
                 self.after.append((info.t, info.amp))
             if info.energy is not None and info.level == MOVING:
                 result = self._moved_again(info.t, frame.link)
-            elif info.t >= self.deadline:
+            elif (info.t >= self.deadline and frame.link == self.pending.link
+                  and info.amp is not None):
                 result = self._decide(info.t)
 
         if event is not None:
@@ -202,6 +240,7 @@ class Pipeline:
                          detector=getattr(self.detector, "name", type(self.detector).__name__),
                          label=verdict.label, confidence=verdict.confidence,
                          fall_probability=verdict.details.get("fall_probability"),
+                         class_probabilities=verdict.details.get("class_probabilities"),
                          fall_threshold=getattr(self.detector, "fall_threshold", None),
                          classify_ms=round(classify_ms, 3),
                          features=dict(zip(features.NAMES, x.tolist())))
@@ -214,9 +253,8 @@ class Pipeline:
 
     def _abort(self, t: float, reason: str, note: str = "") -> None:
         link = self.pending.link if self.pending is not None else ""
-        self.pending, self.after = None, []
         self._diagnostic(t, reason, link, f"candidate aborted; RF not called; {note}")
-        self.flow.not_a_fall(t)
+        self._discard_candidate(t)
 
     def _moved_again(self, t: float, moving_link: str | None = None) -> tuple[MotionEvent, Verdict]:
         event, self.pending = self.pending, None
