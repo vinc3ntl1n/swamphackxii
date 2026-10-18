@@ -6,3 +6,8 @@ data/
 .env
 
 node_modules/
+
+# Claude Code
+.claude/
+CLAUDE.md
+CLAUDE.local.md
