@@ -4,6 +4,7 @@ import argparse
 import os
 import time
 from datetime import datetime
+from pathlib import Path
 
 from backend import config
 from backend.detection import detector
@@ -40,6 +41,8 @@ def main() -> None:
     ap.add_argument("--replay", help="a session log or Recording to play back instead")
     ap.add_argument("--speed", type=float, default=1.0, help="replay speed, 0 = no waiting")
     ap.add_argument("--detector", choices=("threshold", "rf"), default=config.DETECTOR)
+    ap.add_argument("--model", type=Path, default=detector.MODEL_PATH,
+                    help="saved forest to load with --detector rf")
     ap.add_argument("--view", action=argparse.BooleanOptionalAction, default=True,
                     help="serve the live dashboard and open it in the browser (--no-view turns it off)")
     ap.add_argument("--view-port", type=int, default=8000, help="port for the dashboard")
@@ -68,7 +71,7 @@ def main() -> None:
 
     sink = ConsoleSink()
     view = start_view(args, sink) if args.view else None
-    pipe = view.pipe if view else Pipeline(sink, detector.make(args.detector))
+    pipe = view.pipe if view else Pipeline(sink, detector.make(args.detector, args.model))
     print(f"Detector: {pipe.detector.name}")
     if cals:
         from backend.dashboard import preload
@@ -111,7 +114,7 @@ def start_view(args, console: ConsoleSink):
     history = History(hub, "replay" if args.replay else "live", Path(args.history) if args.history else HISTORY)
     web = WebSink(hub, history, Notices(hub, history))
     sink = Tee(console, web)
-    pipe = Pipeline(sink, detector.make(args.detector))
+    pipe = Pipeline(sink, detector.make(args.detector, args.model))
     view = Dashboard(hub, pipe, sink, web, Path(args.sim_fall) if args.sim_fall else SIM_FALL)
     hub.publish({"type": "source", "mode": "REPLAY" if args.replay else "LIVE"})
     hub.publish({"type": "config", "t_on": config.T_ON, "t_off": config.T_OFF,

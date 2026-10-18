@@ -13,6 +13,27 @@ MODEL_PATH = config.DATA_DIR / "model.joblib"
 SHOWN = ("peak", "static_change", "duration_s")
 
 
+def predict_labels(probabilities: np.ndarray, classes, fall_threshold: float | None = None) -> np.ndarray:
+    """Apply the same decision rule in offline evaluation and live inference."""
+    p = np.asarray(probabilities, dtype=float)
+    labels = np.asarray(classes, dtype=str)
+    if (p.ndim != 2 or p.shape[1] != len(labels) or not len(labels)
+            or not np.isfinite(p).all() or (p < 0).any() or (p > 1).any()
+            or not np.allclose(p.sum(axis=1), 1)):
+        raise ValueError("expected finite class probabilities with each row summing to one")
+    if fall_threshold is None:
+        return labels[np.argmax(p, axis=1)]
+    if not np.isfinite(fall_threshold) or not 0 <= fall_threshold <= 1:
+        raise ValueError("fall threshold must be between 0 and 1")
+    if "fall" not in labels or len(labels) < 2:
+        raise ValueError("a fall threshold requires fall and at least one other class")
+    fall = int(np.flatnonzero(labels == "fall")[0])
+    other = np.flatnonzero(labels != "fall")
+    pred = labels[other[np.argmax(p[:, other], axis=1)]].copy()
+    pred[p[:, fall] >= fall_threshold] = "fall"
+    return pred
+
+
 @dataclass
 class Verdict:
     label: str
@@ -47,12 +68,27 @@ class RandomForestDetector:
             raise ValueError("model.joblib was trained on different features: rerun python -m backend.training.train")
         self.model = bundle["model"]
         self.trained_at = bundle["trained_at"]
+        self.fall_threshold = bundle.get("fall_threshold")  # Legacy bundles retain argmax.
+        settings = bundle.get("motion_settings")
+        if settings is not None:
+            from backend.training.contract import motion_settings
+            if settings != motion_settings():
+                raise ValueError("model preprocessing settings differ: restore settings or retrain")
+        predict_labels(np.ones((1, len(self.model.classes_))) / len(self.model.classes_),
+                       self.model.classes_, self.fall_threshold)
 
     def classify(self, x: np.ndarray) -> Verdict:
+        if x.shape != (len(features.NAMES),) or not np.isfinite(x).all():
+            raise ValueError("expected one finite value per model feature")
         proba = self.model.predict_proba(x.reshape(1, -1))[0]
-        k = int(np.argmax(proba))
-        return Verdict(str(self.model.classes_[k]), float(proba[k]), _details(x))
+        label = str(predict_labels(proba.reshape(1, -1), self.model.classes_, self.fall_threshold)[0])
+        k = int(np.flatnonzero(self.model.classes_ == label)[0])
+        details = _details(x)
+        if "fall" in self.model.classes_:
+            fall = list(self.model.classes_).index("fall")
+            details["fall_probability"] = round(float(proba[fall]), 4)
+        return Verdict(label, float(proba[k]), details)
 
 
-def make(name: str):
-    return RandomForestDetector() if name == "rf" else ThresholdDetector()
+def make(name: str, model_path: Path = MODEL_PATH):
+    return RandomForestDetector(model_path) if name == "rf" else ThresholdDetector()
