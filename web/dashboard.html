@@ -3,25 +3,105 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fall dashboard</title>
+<title>Fall Watch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;800;900&display=swap">
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="dashboard.css">
 </head>
-<body>
+<body class="friendly-page">
+<template id="gator-tpl">
+  <svg class="gator" viewBox="0 0 240 150" data-mood="happy" aria-hidden="true">
+    <ellipse class="g-shadow" cx="122" cy="141" rx="104" ry="6"></ellipse>
+    <path class="g-skin" d="M72 108 C46 118 18 112 8 92 C24 102 46 100 68 90 Z"></path>
+    <path class="g-ridge" d="M66 82 l7 -11 l7 11 Z M82 76 l7 -12 l7 12 Z M98 74 l7 -12 l7 12 Z M114 76 l7 -11 l7 11 Z"></path>
+    <ellipse class="g-skin" cx="100" cy="106" rx="54" ry="32"></ellipse>
+    <ellipse class="g-belly" cx="104" cy="120" rx="40" ry="14"></ellipse>
+    <rect class="g-skin" x="70" y="118" width="16" height="20" rx="8"></rect>
+    <rect class="g-skin" x="118" y="118" width="16" height="20" rx="8"></rect>
+    <path class="g-skin" d="M124 66 C140 48 178 50 196 62 L226 72 C238 76 238 94 226 98 L156 106 C134 108 118 90 124 66 Z"></path>
+    <circle class="g-skin" cx="221" cy="72" r="7"></circle>
+    <circle class="g-nostril" cx="223" cy="70" r="2.5"></circle>
+    <circle class="g-skin" cx="152" cy="60" r="19"></circle>
+    <circle class="g-eye" cx="152" cy="58" r="12.5"></circle>
+    <circle class="g-pupil" cx="155" cy="60" r="6.5"></circle>
+    <circle class="g-shine" cx="157" cy="56" r="2.5"></circle>
+    <g class="g-brows"><path d="M139 41 L165 34"></path></g>
+    <ellipse class="g-blush" cx="168" cy="88" rx="9" ry="5"></ellipse>
+    <g class="g-mouth g-happy">
+      <path class="g-line" d="M150 92 Q186 106 228 88"></path>
+      <path class="g-tooth" d="M176 98 L180 106 L184 99 Z M194 98 L198 105 L202 96 Z M210 94 L213 101 L217 92 Z"></path>
+    </g>
+    <g class="g-mouth g-worried"><path class="g-line" d="M156 96 Q170 90 184 96 T214 94"></path></g>
+    <g class="g-mouth g-alarmed">
+      <path class="g-open" d="M152 92 Q190 90 228 86 Q214 112 172 108 Q156 104 152 92 Z"></path>
+      <path class="g-tooth" d="M182 90 L186 97 L190 89 Z M202 88 L206 95 L210 87 Z"></path>
+    </g>
+  </svg>
+</template>
+
 <header class="topbar">
+  <span class="brand"><span class="brand-gator" data-gator="happy"></span>Fall Watch</span>
   <div class="toggle views" role="group" aria-label="View">
     <button type="button" data-view="caregiver">Caregiver</button>
     <button type="button" data-view="resident">Resident</button>
+    <button type="button" data-view="dev">Dev</button>
   </div>
-  <span class="chip" id="source">–</span>
   <span class="demo">
-    <span class="demo-label">Demo</span>
+    <span class="demo-label" id="source">Demo</span>
     <button type="button" class="chip" id="simulate" disabled>Simulate fall</button>
   </span>
   <button type="button" class="chip sound" id="sound"></button>
 </header>
 
-<main class="dash" id="caregiver">
+<main class="care" id="caregiver">
+  <section class="care-card" id="cg-card" data-tone="calm" role="status" aria-live="polite">
+    <div class="care-gator" data-gator="happy" id="cg-gator"></div>
+    <div class="care-body">
+      <span class="care-pill" id="cg-pill">Watching</span>
+      <h1 class="care-word" id="cg-word">Connecting…</h1>
+      <p class="care-sub" id="cg-sub"></p>
+      <div class="care-timer" id="cg-timer" hidden>
+        <svg viewBox="0 0 120 120" aria-hidden="true">
+          <circle class="ring-track" cx="60" cy="60" r="52"></circle>
+          <circle class="ring-fill" id="cg-ring" cx="60" cy="60" r="52" pathLength="100"></circle>
+        </svg>
+        <span class="care-secs" id="cg-secs"></span>
+      </div>
+      <div class="care-actions">
+        <button type="button" class="pill-btn main" id="cg-cancel" hidden>Cancel the alert</button>
+        <button type="button" class="pill-btn main" id="cg-handled" hidden>I've handled it</button>
+        <button type="button" class="pill-btn" id="cg-false" hidden>It was a false alarm</button>
+        <a class="pill-btn" id="cg-call" hidden>📞 Call them</a>
+      </div>
+    </div>
+  </section>
+  <section class="care-side">
+    <figure class="soft-card movement">
+      <header><h2>Movement in the room</h2><span class="soft-note" id="cg-move-note">last 20 seconds</span></header>
+      <div class="plot"><canvas id="cg-energy" role="img" aria-label="Average movement in the room over the last 20 seconds"></canvas></div>
+    </figure>
+    <figure class="soft-card activity">
+      <header><h2>Recent activity</h2></header>
+      <ol class="activity-list" id="cg-activity"></ol>
+      <p class="activity-empty" id="cg-empty">Nothing has happened yet. That's a good thing.</p>
+    </figure>
+  </section>
+</main>
+
+<main class="resident" id="resident" hidden>
+  <div class="resident-card" id="resident-card" data-tone="calm" role="status" aria-live="assertive">
+    <div class="resident-gator" data-gator="happy" id="res-gator"></div>
+    <div class="resident-word" id="resident-word">All good</div>
+    <div class="resident-sub" id="resident-sub">Fall Watch is on</div>
+    <div class="resident-buttons" id="resident-buttons" hidden>
+      <button type="button" class="big ok" id="res-ok">I'm OK</button>
+      <button type="button" class="big help" id="res-help">I need help</button>
+    </div>
+  </div>
+</main>
+
+<main class="dash" id="dev" hidden>
   <section class="dash-left" aria-label="Fall Flow">
     <div class="status" id="status" data-tone="idle" role="status" aria-live="polite">
       <div class="status-head"><span>FALL WATCH</span><span class="status-tag" id="sim-tag" hidden>SIMULATED</span></div>
@@ -66,6 +146,7 @@
   </section>
   <section class="dash-right" aria-label="Live signal and history">
     <div class="chips" id="chips">
+      <span class="chip" id="dev-source">–</span>
       <span class="chip alert" id="stale" hidden></span>
     </div>
     <figure class="card wave">
@@ -96,20 +177,10 @@
     </figure>
   </section>
 </main>
-
-<main class="resident" id="resident" hidden>
-  <div class="resident-card" id="resident-card" data-tone="calm" role="status" aria-live="assertive">
-    <div class="resident-word" id="resident-word">All good</div>
-    <div class="resident-sub" id="resident-sub">Fall watch is on</div>
-    <div class="resident-buttons" id="resident-buttons" hidden>
-      <button type="button" class="big ok" id="res-ok">I'm OK</button>
-      <button type="button" class="big help" id="res-help">I need help</button>
-    </div>
-  </div>
-</main>
+<div class="tip" id="tip" hidden></div>
 
 <script type="module">
-import { SignalBuffer, Waveform, EnergyChart, readTheme, watchTheme, connect } from "./signal.js";
+import { SignalBuffer, Waveform, EnergyChart, readTheme, watchTheme, connect, timeAtX } from "./signal.js";
 
 const $ = (id) => document.getElementById(id);
 const STALE_MS = 2000;
@@ -122,6 +193,7 @@ const NOTICE = {
   all_clear: "All-clear to the Caregiver", help: "Help Request to the Caregiver",
 };
 const DELIVERY = { sending: "sending…", sent: "✓ sent", failed: "✗ failed", not_delivered: "✗ not delivered" };
+const FRIENDLY_DELIVERY = { sending: "sending…", sent: "delivered", failed: "couldn't send", not_delivered: "not delivered" };
 const HISTORY_TEXT = {
   confirmed_fall: (e) => `Confirmed Fall #${e.fall} · link ${e.links}${e.details ? ` · peak ${e.details.peak} · room change ${e.details.static_change}` : ""}`,
   alert: (e) => `Alert for fall #${e.fall}`,
@@ -136,14 +208,19 @@ const HISTORY_TEXT = {
 const links = new Map();
 const empty = new SignalBuffer();
 const wave = new Waveform($("wave"), empty);
+const avg = new SignalBuffer();
+const movement = new EnergyChart($("cg-energy"), avg);
 let theme = readTheme();
+let soft = readTheme($("caregiver"));
 let st = fresh();
 let conn = "connecting";
 let ever = false;
 let openedAt = performance.now();
 let pick = "auto";
-let view = new URLSearchParams(location.search).get("view") === "resident" ? "resident" : "caregiver";
+const asked = new URLSearchParams(location.search).get("view");
+let view = asked === "resident" || asked === "dev" ? asked : "caregiver";
 let tab = "live";
+let hover = null;
 let muted = false;
 let audio = null;
 let beepTimer = null;
@@ -155,8 +232,14 @@ function fresh() {
   return {
     cfg: null, source: null, ended: false, state: null, stateAt: 0, alarm: false,
     events: [], lastFall: null, lastVerdict: null, simTag: false,
-    notices: new Map(), historyRows: new Map(),
+    notices: new Map(), historyRows: new Map(), activity: 0,
   };
+}
+
+function gator(host, mood) {
+  if (!host.firstElementChild) host.append($("gator-tpl").content.firstElementChild.cloneNode(true));
+  const svg = host.firstElementChild;
+  if (svg.dataset.mood !== mood) svg.dataset.mood = mood;
 }
 
 function linkFor(name) {
@@ -187,8 +270,28 @@ function clock(t) {
   return new Date(t * 1000).toLocaleTimeString([], { hour12: false });
 }
 
+function shortClock(t) {
+  return new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 function day(t) {
   return new Date(t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+}
+
+function friendlyDay(t) {
+  const d = new Date(t * 1000);
+  const today = new Date();
+  const time = shortClock(t);
+  if (d.toDateString() === today.toDateString()) return time;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+}
+
+function pushAverage(t, nowMs) {
+  const live = [...links.values()].filter((l) => isFresh(l, nowMs) && l.buf.latest()?.energy != null);
+  if (!live.length) return;
+  const energy = live.reduce((sum, l) => sum + l.buf.latest().energy, 0) / live.length;
+  const moving = live.some((l) => l.buf.latest().level === "moving");
+  avg.push({ t, energy, level: moving ? "moving" : "still" }, nowMs);
 }
 
 function onMessage(msg) {
@@ -197,6 +300,7 @@ function onMessage(msg) {
     l.arrival = performance.now();
     const f = l.buf.push(msg, l.arrival);
     if (f && f.level === "moving") l.movedAt = f.t;
+    if (f) pushAverage(f.t, l.arrival);
   } else if (msg.type === "source") {
     st.source = msg.mode;
     st.ended = !!msg.ended;
@@ -226,8 +330,8 @@ function onState(s) {
     l.buf.reset(0);
     l.arrival = l.movedAt = null;
   }
-  $("events").replaceChildren();
-  $("history").replaceChildren();
+  avg.reset(0);
+  for (const id of ["events", "history", "cg-activity"]) $(id).replaceChildren();
   renderWhy();
   openedAt = performance.now();
 }
@@ -267,10 +371,82 @@ function onDelivery(d) {
     known.row.lastChild.textContent = noticeText(known.n, d.status);
   }
   const hist = st.historyRows.get(d.id);
-  if (hist) {
-    hist.row.dataset.status = d.status;
-    hist.row.lastChild.textContent = noticeText(hist.e, d.status) + hist.suffix;
+  if (!hist) return;
+  hist.row.dataset.status = d.status;
+  hist.row.lastChild.textContent = noticeText(hist.e, d.status) + hist.suffix;
+  if (hist.care) {
+    hist.care.dataset.status = d.status;
+    hist.care.querySelector(".act-status").textContent = FRIENDLY_DELIVERY[d.status] ?? d.status;
   }
+}
+
+function who() {
+  return (st.cfg && st.cfg.resident_name) || "";
+}
+
+function friendly(e) {
+  const name = who();
+  const they = name || "They";
+  const them = name || "them";
+  switch (e.what) {
+    case "confirmed_fall": return { icon: "⚠️", tone: "bad", text: name ? `A fall was detected for ${name}` : "A fall was detected" };
+    case "notify":
+      if (e.kind === "check_in") return { icon: "💬", tone: "info", text: `Asked ${them} “Are you OK?”`, status: true };
+      if (e.kind === "alert") return { icon: "🔔", tone: "bad", text: "You were alerted", status: true };
+      return null;
+    case "countdown_cancelled":
+      return e.by === "resident"
+        ? { icon: "💚", tone: "good", text: `${they} said they're OK` }
+        : { icon: "✋", tone: "info", text: "You cancelled the alert" };
+    case "late_answer": return { icon: "💚", tone: "good", text: `${they} said they're OK (after the alert)` };
+    case "resolved":
+      return e.reason === "false_alarm"
+        ? { icon: "👍", tone: "info", text: "You marked it a false alarm" }
+        : { icon: "✅", tone: "good", text: "You marked it handled" };
+    case "help_request": return { icon: "🆘", tone: "bad", text: `${they} asked for help` };
+    case "called": return { icon: "📞", tone: "info", text: `You called ${them}` };
+    default: return null;
+  }
+}
+
+function addActivity(e) {
+  const f = friendly(e);
+  if (!f) return null;
+  const li = document.createElement("li");
+  li.dataset.tone = f.tone;
+  const icon = document.createElement("span");
+  icon.className = "act-icon";
+  icon.textContent = f.icon;
+  const body = document.createElement("div");
+  body.className = "act-body";
+  const text = document.createElement("span");
+  text.className = "act-text";
+  text.textContent = f.text;
+  const meta = document.createElement("span");
+  meta.className = "act-meta";
+  const when = document.createElement("span");
+  when.textContent = friendlyDay(e.t);
+  meta.append(when);
+  if (f.status) {
+    const status = document.createElement("span");
+    status.className = "act-status";
+    status.textContent = FRIENDLY_DELIVERY[e.status] ?? e.status;
+    meta.append(status);
+    li.dataset.status = e.status;
+  }
+  if (e.mode && e.mode !== "live") {
+    const tag = document.createElement("span");
+    tag.className = "act-tag";
+    tag.textContent = e.mode === "sim" ? "practice" : "replay";
+    meta.append(tag);
+  }
+  body.append(text, meta);
+  li.append(icon, body);
+  const list = $("cg-activity");
+  list.prepend(li);
+  while (list.children.length > 60) list.lastChild.remove();
+  $("cg-empty").hidden = true;
+  return li;
 }
 
 function onHistory(e) {
@@ -278,6 +454,7 @@ function onHistory(e) {
     onDelivery(e);
     return;
   }
+  const care = addActivity(e);
   if (e.what === "alert") return;
   let text;
   let label = null;
@@ -289,7 +466,7 @@ function onHistory(e) {
   const row = addRow($("history"), e.t, label, text + suffix, label ? "event" : "note", day);
   if (e.what === "notify") {
     row.dataset.status = e.status;
-    st.historyRows.set(e.id, { e, row, suffix });
+    st.historyRows.set(e.id, { e, row, suffix, care });
   }
 }
 
@@ -404,6 +581,10 @@ function timeLeft(nowMs) {
   return { left, span, secs: Math.ceil(left) };
 }
 
+function liveLinks(nowMs) {
+  return [...links.values()].filter((l) => isFresh(l, nowMs));
+}
+
 function statusFor(nowMs) {
   if (conn !== "open") {
     return ever ? { tone: "idle", word: "DISCONNECTED", sub: "run.py stopped? check the terminal" }
@@ -418,7 +599,7 @@ function statusFor(nowMs) {
     return { tone: "countdown", word: "FALL DETECTED", sub: `Check-in sent · Alert in ${tl.secs} s`, progress: tl.left / tl.span };
   }
   if (s === "ALERTED") return { tone: "alerted", word: "CAREGIVER ALERTED", sub: `at ${clock(st.state.t)} · resolve when handled` };
-  const live = [...links.values()].filter((l) => isFresh(l, nowMs));
+  const live = liveLinks(nowMs);
   if (live.some((l) => l.buf.latest()?.level === "calibrating")) {
     return { tone: "calibrating", word: "CALIBRATING", sub: "keep the area still for 10 s" };
   }
@@ -437,6 +618,12 @@ function show(el, on) {
   if (el.hidden === on) el.hidden = !on;
 }
 
+function callLink(el) {
+  const phone = st.cfg && st.cfg.resident_phone;
+  if (phone && el.getAttribute("href") !== `tel:${phone}`) el.setAttribute("href", `tel:${phone}`);
+  return !!phone;
+}
+
 function renderStatus(nowMs) {
   const c = statusFor(nowMs);
   const box = $("status");
@@ -447,14 +634,74 @@ function renderStatus(nowMs) {
   $("sim-tag").hidden = !st.simTag;
   const s = flowState();
   const open = conn === "open";
-  const phone = st.cfg && st.cfg.resident_phone;
+  const phone = callLink($("call"));
   show($("cancel"), open && s === "COUNTDOWN");
   show($("resolve-handled"), open && s === "ALERTED");
   show($("resolve-false"), open && s === "ALERTED");
-  show($("call"), open && !!phone && (s === "COUNTDOWN" || s === "ALERTED"));
-  if (phone && $("call").getAttribute("href") !== `tel:${phone}`) $("call").setAttribute("href", `tel:${phone}`);
+  show($("call"), open && phone && (s === "COUNTDOWN" || s === "ALERTED"));
   show($("actions-note"), !open || (s !== "COUNTDOWN" && s !== "ALERTED"));
   setText($("actions-note"), s === "FALL_CANDIDATE" ? "Waiting for the Stillness Window" : "No action needed");
+}
+
+function careFor(nowMs) {
+  const name = who();
+  if (conn !== "open") {
+    return ever
+      ? { tone: "offline", mood: "worried", pill: "Offline", word: "We lost the connection", sub: "Trying to reconnect…" }
+      : { tone: "calm", mood: "happy", pill: "Starting", word: "Connecting…", sub: "" };
+  }
+  const s = flowState();
+  const tl = timeLeft(nowMs);
+  if (s === "FALL_CANDIDATE") {
+    return { tone: "watch", mood: "worried", pill: "Checking", word: "Possible fall", sub: "Checking whether it was a fall…", timer: tl, fill: tl ? 1 - tl.left / tl.span : 0 };
+  }
+  if (s === "COUNTDOWN") {
+    return {
+      tone: "urgent", mood: "worried", pill: "Fall detected", word: name ? `${name} may have fallen` : "A fall was detected",
+      sub: `We asked ${name ? `if ${name} is` : "if they're"} OK. You'll be alerted if there's no answer.`, timer: tl, fill: tl ? tl.left / tl.span : 0,
+    };
+  }
+  if (s === "ALERTED") {
+    return {
+      tone: "alert", mood: "alarmed", pill: "Needs you", word: name ? `${name} needs help` : "They may need help",
+      sub: `A fall at ${shortClock(st.state.t)} and no answer. Please check on ${name || "them"}.`,
+    };
+  }
+  const live = liveLinks(nowMs);
+  if (live.some((l) => l.buf.latest()?.level === "calibrating")) {
+    return { tone: "calm", mood: "happy", pill: "Getting ready", word: "Getting ready", sub: "Learning what the empty room looks like…" };
+  }
+  if (!live.length && !(st.state && st.state.sim)) {
+    return st.ended
+      ? { tone: "calm", mood: "happy", pill: "Demo", word: "All is well", sub: "The replay has finished. Try Simulate fall." }
+      : { tone: "offline", mood: "worried", pill: "Sensors offline", word: "Can't see the room", sub: "No signal from the sensors. Are they plugged in?" };
+  }
+  const moving = live.some((l) => l.buf.latest()?.level === "moving");
+  return { tone: "calm", mood: "happy", pill: "Watching", word: "All is well", sub: moving ? "Someone is moving around. Everything looks normal." : "The room is calm. No falls detected." };
+}
+
+function renderCare(nowMs) {
+  const c = careFor(nowMs);
+  const card = $("cg-card");
+  if (card.dataset.tone !== c.tone) card.dataset.tone = c.tone;
+  gator($("cg-gator"), c.mood);
+  setText($("cg-pill"), st.simTag && c.tone !== "calm" ? `${c.pill} · practice` : c.pill);
+  setText($("cg-word"), c.word);
+  setText($("cg-sub"), c.sub);
+  show($("cg-timer"), !!c.timer);
+  if (c.timer) {
+    setText($("cg-secs"), String(c.timer.secs));
+    $("cg-ring").style.strokeDasharray = `${(Math.min(1, Math.max(0, c.fill)) * 100).toFixed(1)} 100`;
+  }
+  const s = flowState();
+  const open = conn === "open";
+  const phone = callLink($("cg-call"));
+  show($("cg-cancel"), open && s === "COUNTDOWN");
+  show($("cg-handled"), open && s === "ALERTED");
+  show($("cg-false"), open && s === "ALERTED");
+  show($("cg-call"), open && phone && (s === "COUNTDOWN" || s === "ALERTED"));
+  const f = avg.latest();
+  setText($("cg-move-note"), f && liveLinks(nowMs).length ? (f.level === "moving" ? "moving now" : "calm now") : "last 20 seconds");
 }
 
 function renderMotion(nowMs) {
@@ -497,10 +744,16 @@ function renderMap(nowMs) {
   }
 }
 
+function sourceText() {
+  if (!st.source) return "Demo";
+  if (st.source === "LIVE") return "Live";
+  return st.ended ? "Replay · ended" : "Replay";
+}
+
 function renderChips(nowMs) {
   const source = $("source");
-  setText(source, st.source ? (st.ended ? `${st.source} · ended` : st.source) : "–");
-  if (source.dataset.source !== (st.source ?? "")) source.dataset.source = st.source ?? "";
+  setText(source, sourceText());
+  setText($("dev-source"), st.source ? (st.ended ? `${st.source} · ended` : st.source) : "–");
   for (const l of links.values()) {
     let chip = $(`chip-${l.name}`);
     if (!chip) {
@@ -529,22 +782,26 @@ function renderResident(nowMs) {
   const s = flowState();
   const tl = timeLeft(nowMs);
   let tone = "calm";
+  let mood = "happy";
   let word = "All good";
-  let sub = conn === "open" ? "Fall watch is on" : "Connecting…";
+  let sub = conn === "open" ? "Fall Watch is looking out for you" : "Connecting…";
   let buttons = false;
   if (conn === "open" && s === "COUNTDOWN") {
     tone = "ask";
+    mood = "worried";
     word = "Are you OK?";
-    sub = tl ? `Your caregiver will be told in ${tl.secs} s` : "Your caregiver will be told soon";
+    sub = tl ? `If you don't answer, your caregiver will be told in ${tl.secs} s` : "Your caregiver will be told soon";
     buttons = true;
   } else if (conn === "open" && s === "ALERTED") {
     tone = "told";
+    mood = "worried";
     word = "Your caregiver has been told";
     sub = "Help is on the way. If you're OK, press I'm OK.";
     buttons = true;
   }
   const card = $("resident-card");
   if (card.dataset.tone !== tone) card.dataset.tone = tone;
+  gator($("res-gator"), mood);
   setText($("resident-word"), word);
   setText($("resident-sub"), sub);
   show($("resident-buttons"), buttons);
@@ -628,20 +885,46 @@ function renderSound() {
   const btn = $("sound");
   if (btn.dataset.sound !== mode) {
     btn.dataset.sound = mode;
-    btn.textContent = { muted: "🔇 Alarm muted", on: "🔊 Alarm on", blocked: "🔊 Allow alarm sound" }[mode];
+    btn.textContent = { muted: "🔇 Alarm muted", on: "🔊 Alarm on", blocked: "🔊 Turn on alarm sound" }[mode];
     btn.setAttribute("aria-pressed", String(!muted));
   }
+}
+
+function renderTip() {
+  const tip = $("tip");
+  if (!hover || view !== "caregiver") {
+    tip.hidden = true;
+    return;
+  }
+  const now = avg.now(performance.now());
+  const hit = now != null ? timeAtX($("cg-energy"), hover.clientX, now) : null;
+  const f = hit ? avg.nearest(hit.t) : null;
+  if (!hit || !f || Math.abs(f.t - hit.t) > 0.3) {
+    tip.hidden = true;
+    return;
+  }
+  const b = document.createElement("b");
+  b.textContent = f.level === "moving" ? "Moving" : "Calm";
+  tip.replaceChildren(b, document.createTextNode(` · ${Math.max(0, now - hit.t).toFixed(0)} s ago`));
+  tip.hidden = false;
+  tip.style.left = `${Math.min(hover.clientX + 14, window.innerWidth - tip.offsetWidth - 8)}px`;
+  tip.style.top = `${Math.min(hover.clientY + 14, window.innerHeight - tip.offsetHeight - 8)}px`;
+  return hit.x;
 }
 
 function setView(next) {
   view = next;
   $("caregiver").hidden = view !== "caregiver";
   $("resident").hidden = view !== "resident";
+  $("dev").hidden = view !== "dev";
   document.body.dataset.view = view;
+  document.body.classList.toggle("friendly-page", view !== "dev");
+  theme = readTheme();
+  soft = readTheme($("caregiver"));
   for (const b of document.querySelectorAll(".views button")) b.setAttribute("aria-pressed", String(b.dataset.view === view));
   const url = new URL(location.href);
-  if (view === "resident") url.searchParams.set("view", "resident");
-  else url.searchParams.delete("view");
+  if (view === "caregiver") url.searchParams.delete("view");
+  else url.searchParams.set("view", view);
   history.replaceState(null, "", url);
 }
 
@@ -658,7 +941,16 @@ function setTab(next) {
 
 function loop() {
   const nowMs = performance.now();
+  gator(document.querySelector(".brand-gator"), "happy");
   if (view === "caregiver") {
+    renderCare(nowMs);
+    const hx = renderTip();
+    movement.draw(avg.now(nowMs), [], soft, hx ?? null, null);
+  } else if (view === "resident") {
+    renderResident(nowMs);
+    $("tip").hidden = true;
+  } else {
+    $("tip").hidden = true;
     let now = null;
     for (const l of links.values()) {
       const t = l.buf.now(nowMs);
@@ -676,11 +968,8 @@ function loop() {
     renderStatus(nowMs);
     renderMotion(nowMs);
     renderMap(nowMs);
-    renderChips(nowMs);
-  } else {
-    renderResident(nowMs);
-    renderChips(nowMs);
   }
+  renderChips(nowMs);
   $("simulate").disabled = conn !== "open" || flowState() !== "IDLE" || !!(st.state && st.state.sim);
   renderSound();
   requestAnimationFrame(loop);
@@ -689,8 +978,10 @@ function loop() {
 const link = connect(onMessage, onState);
 const commands = [
   ["cancel", { cmd: "cancel" }], ["resolve-handled", { cmd: "resolve", reason: "handled" }],
-  ["resolve-false", { cmd: "resolve", reason: "false_alarm" }], ["simulate", { cmd: "simulate" }],
-  ["call", { cmd: "call" }], ["res-ok", { cmd: "ok" }], ["res-help", { cmd: "help" }],
+  ["resolve-false", { cmd: "resolve", reason: "false_alarm" }], ["call", { cmd: "call" }],
+  ["cg-cancel", { cmd: "cancel" }], ["cg-handled", { cmd: "resolve", reason: "handled" }],
+  ["cg-false", { cmd: "resolve", reason: "false_alarm" }], ["cg-call", { cmd: "call" }],
+  ["simulate", { cmd: "simulate" }], ["res-ok", { cmd: "ok" }], ["res-help", { cmd: "help" }],
 ];
 for (const [id, msg] of commands) {
   $(id).addEventListener("click", () => {
@@ -701,6 +992,8 @@ for (const [id, msg] of commands) {
 }
 for (const b of document.querySelectorAll(".views button")) b.addEventListener("click", () => setView(b.dataset.view));
 for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("click", () => setTab(b.dataset.tab));
+$("cg-energy").addEventListener("pointermove", (e) => (hover = { clientX: e.clientX, clientY: e.clientY }));
+$("cg-energy").addEventListener("pointerleave", () => (hover = null));
 $("sound").addEventListener("click", () => {
   const blocked = !audio || audio.state !== "running";
   ensureAudio();
@@ -714,6 +1007,7 @@ document.addEventListener("pointerdown", ensureAudio);
 document.addEventListener("keydown", ensureAudio);
 watchTheme(() => {
   theme = readTheme();
+  soft = readTheme($("caregiver"));
 });
 setView(view);
 setTab(tab);

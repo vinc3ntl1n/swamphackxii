@@ -115,7 +115,8 @@ def start_view(args, console: ConsoleSink):
                  "t_static": config.T_STATIC, "sit_max_s": config.SIT_MAX_S,
                  "stillness_s": config.STILLNESS_S, "countdown_s": config.COUNTDOWN_S,
                  "detector": pipe.detector.name, "links": sorted(config.RECEIVERS),
-                 "resident_phone": os.environ.get("RESIDENT_PHONE", "")})
+                 "resident_phone": os.environ.get("RESIDENT_PHONE", ""),
+                 "resident_name": os.environ.get("RESIDENT_NAME", "")})
     try:
         url = server.serve(hub, args.view_port, view.on_command)
     except Exception as e:

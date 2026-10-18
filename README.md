@@ -133,23 +133,24 @@ The Recalibrate button sends `POST /calibrate` with `Content-Type: application/j
 
 ### The dashboard
 
-`backend.run` serves `web/dashboard.html` at `/dashboard` (the record page stays at `/`) and opens it. Words in capitals are defined in [GLOSSARY.md](GLOSSARY.md). A toggle in the header switches between two views (`/dashboard?view=resident` opens the second one directly), and a **Demo** strip holds **Simulate fall**, which plays a real fall Recording (`--sim-fall`, default `fall_20261017-021504`) through its own trackers into the same Fall Flow, so the detector, the Stillness Window and the Countdown all run for real without hardware.
+`backend.run` serves `web/dashboard.html` at `/dashboard` (the record page stays at `/`) and opens it. Words in capitals are defined in [GLOSSARY.md](GLOSSARY.md). A toggle in the header switches between three views (`/dashboard?view=resident` or `?view=dev` opens one directly), and a **Demo** strip holds **Simulate fall**, which plays a real fall Recording (`--sim-fall`, default `fall_20261017-021504`) through its own trackers into the same Fall Flow, so the detector, the Stillness Window and the Countdown all run for real without hardware.
 
-**Caregiver view**, made to be read from a few metres away:
-
-- A big **Fall Flow badge**: `ALL QUIET`, `FALL SUSPECTED` ("checking for movement… N s"), `FALL DETECTED` ("Check-in sent · Alert in N s", red, pulsing), then `CAREGIVER ALERTED`. A `SIMULATED` tag shows during a Simulated Fall. Under it, a small badge per Link with its Motion Level.
-- **Cancel Countdown** during the Countdown; **Resolve: handled** and **Resolve: false alarm** after an Alert; **Call the Resident** (a `tel:` link) when `RESIDENT_PHONE` is set.
-- A top-down **room map**: the sender at the point of the V, a line to each receiver. A line turns blue while its Link is moving, amber while a fall is suspected on it, and red for the Link(s) of the Confirmed Fall.
-- **Why it's a fall**: the last fall's `peak` and Room Change against `T_FALL` and `T_STATIC`. Before any fall it shows why the last Motion Event was not one.
-- The waveform (Auto follows the Link that moved last), motion energy for each Link with Motion Events shaded, and a log with two tabs: **Live** (this run's verdicts, Fall Flow messages, and each Check-in or Alert with its delivery status) and **History** (Confirmed Falls, Check-ins, answers, Alerts and how they ended, across runs).
+**Caregiver view** (the default): a friendly, light page with a gator mascot whose face follows the Fall Flow (happy, worried, alarmed). One big card says what is going on in plain words ("All is well", "Possible fall", "Rose may have fallen" with a countdown ring, "Rose needs help") with the buttons that apply right then: **Cancel the alert**, **I've handled it**, **It was a false alarm**, and **Call them** when `RESIDENT_PHONE` is set. Beside it, **Movement in the room** (motion energy averaged over the Links) and **Recent activity** (falls, Check-ins with their delivery status, answers and Alerts, across runs). Set `RESIDENT_NAME` in `.env` to use the Resident's name instead of "they".
 
 **Resident view**, a fallback for when the texts can't get through: "All good" until a Confirmed Fall (it says nothing while a fall is only suspected, so it never coaches anyone to stay down), then "Are you OK?" with the seconds left, **I'm OK** and **I need help**. After the Alert it says "Your caregiver has been told" and **I'm OK** still works as a Late Answer.
 
-Both views sound the Alarm during the Countdown, with a mute toggle. Browsers only allow sound after a click on the page, so the toggle says so until then.
+**Dev view**, everything for the team and the judges' technical questions:
+
+- A Fall Flow badge (`ALL QUIET`, `FALL SUSPECTED`, `FALL DETECTED`, `CAREGIVER ALERTED`, with a `SIMULATED` tag) and a Motion Level badge per Link, with the Caregiver's buttons.
+- A top-down **room map**: the sender at the point of the V, a line to each receiver. A line turns blue while its Link is moving, amber while a fall is suspected on it, and red for the Link(s) of the Confirmed Fall.
+- **Why it's a fall**: the last fall's `peak` and Room Change against `T_FALL` and `T_STATIC`. Before any fall it shows why the last Motion Event was not one.
+- The waveform (Auto follows the Link that moved last), motion energy for each Link with Motion Events shaded, and a log with **Live** and **History** tabs.
+
+Every view sounds the Alarm during the Countdown, with a mute toggle. Browsers only allow sound after a click on the page, so the toggle says so until then.
 
 When a replay of a Recording ends, its last second is repeated for 5.5 s so the Stillness Window can finish (Recordings stop 8.5 s after GO; see [docs/adr/0002](docs/adr/0002-pad-recording-replays.md)), and the dashboard stays up until Ctrl-C.
 
-Everything in History is appended to `data/history.jsonl`, tagged `live`, `replay` or `sim`. Phone numbers go in a `.env` file at the repo root (`RESIDENT_PHONE=...`, `CAREGIVER_PHONE=...`). Both files are gitignored.
+Everything in History is appended to `data/history.jsonl`, tagged `live`, `replay` or `sim`. Phone numbers and the Resident's name go in a `.env` file at the repo root (`RESIDENT_PHONE=...`, `CAREGIVER_PHONE=...`, `RESIDENT_NAME=...`). Both files are gitignored.
 
 #### Messages and commands
 
@@ -211,7 +212,7 @@ backend/
     train.py           train and evaluate the random forest
 web/
   record.html          live record page (timing cues + signal)
-  dashboard.html       live demo dashboard (state, room map, verdicts, alarm)
+  dashboard.html       live dashboard: Caregiver, Resident and Dev views
   dashboard.css        dashboard layout, on top of style.css
   signal.js            waveform, heatmap, energy and CSI-shape charts, reusable for the dashboard
   style.css            colors (light and dark) and layout
