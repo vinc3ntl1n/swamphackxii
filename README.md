@@ -133,28 +133,57 @@ The Recalibrate button sends `POST /calibrate` with `Content-Type: application/j
 
 ### The dashboard
 
-`backend.run` serves `web/dashboard.html` at `/dashboard` (the record page stays at `/`) and opens it. It is the live demo screen, made to be read from a few metres away:
+`backend.run` serves `web/dashboard.html` at `/dashboard` (the record page stays at `/`) and opens it. Words in capitals are defined in [GLOSSARY.md](GLOSSARY.md). A toggle in the header switches between two views (`/dashboard?view=resident` opens the second one directly), and a **Demo** strip holds **Simulate fall**, which plays a real fall Recording (`--sim-fall`, default `fall_20261017-021504`) through its own trackers into the same Fall Flow, so the detector, the Stillness Window and the Countdown all run for real without hardware.
 
-- A big **state badge**: `IDLE`, `MOVING` (and on which link), `FALL CANDIDATE` with "hold still… deciding in N s", `FALL DETECTED` with "alerting caregiver in N s" (red, pulsing), then `CAREGIVER ALERTED`. A `SIMULATED` tag shows while a simulated fall is running.
-- Buttons: **I'm OK** cancels the countdown, **Reset** clears an alert, and **Simulate fall** plays a real fall Recording (`--sim-fall`, default `fall_20261017-021504`) through its own trackers into the same fall flow, so the detector, the Stillness Window and the countdown all run for real without hardware. The buttons send `{"cmd":"cancel"|"reset"|"simulate"}` over `/ws`. A ticker thread runs them under the same lock as the frame loop, and it keeps the countdown going when packets stop.
-- A top-down **room map**: the sender at the point of the V, a line to each receiver. A line turns blue while its link is moving, and red for the link(s) of the fall being counted down.
-- **Why it's a fall**: the last fall's `peak` and `static_change` against `T_FALL` and `T_STATIC`. Before any fall it shows why the last Motion Event was not one.
-- The waveform (Auto follows the link that moved last), motion energy for each link with Motion Events shaded, and an **event log** of verdicts with their numbers plus the fall-flow messages.
-- An alarm tone while the countdown runs, with a mute toggle. Browsers only allow sound after a click on the page, so the toggle says so until then.
+**Caregiver view**, made to be read from a few metres away:
 
-When a replay ends, its last second is repeated for 5.5 s so the Stillness Window can finish (Recordings stop 8.5 s after GO), and the dashboard stays up until Ctrl-C.
+- A big **Fall Flow badge**: `ALL QUIET`, `FALL SUSPECTED` ("checking for movement… N s"), `FALL DETECTED` ("Check-in sent · Alert in N s", red, pulsing), then `CAREGIVER ALERTED`. A `SIMULATED` tag shows during a Simulated Fall. Under it, a small badge per Link with its Motion Level.
+- **Cancel Countdown** during the Countdown; **Resolve: handled** and **Resolve: false alarm** after an Alert; **Call the Resident** (a `tel:` link) when `RESIDENT_PHONE` is set.
+- A top-down **room map**: the sender at the point of the V, a line to each receiver. A line turns blue while its Link is moving, amber while a fall is suspected on it, and red for the Link(s) of the Confirmed Fall.
+- **Why it's a fall**: the last fall's `peak` and Room Change against `T_FALL` and `T_STATIC`. Before any fall it shows why the last Motion Event was not one.
+- The waveform (Auto follows the Link that moved last), motion energy for each Link with Motion Events shaded, and a log with two tabs: **Live** (this run's verdicts, Fall Flow messages, and each Check-in or Alert with its delivery status) and **History** (Confirmed Falls, Check-ins, answers, Alerts and how they ended, across runs).
 
-On top of the record page's messages, `run.py` sends `frame`s with a `"link"` field (one feed per link) and:
+**Resident view**, a fallback for when the texts can't get through: "All good" until a Confirmed Fall (it says nothing while a fall is only suspected, so it never coaches anyone to stay down), then "Are you OK?" with the seconds left, **I'm OK** and **I need help**. After the Alert it says "Your caregiver has been told" and **I'm OK** still works as a Late Answer.
+
+Both views sound the Alarm during the Countdown, with a mute toggle. Browsers only allow sound after a click on the page, so the toggle says so until then.
+
+When a replay of a Recording ends, its last second is repeated for 5.5 s so the Stillness Window can finish (Recordings stop 8.5 s after GO; see [docs/adr/0002](docs/adr/0002-pad-recording-replays.md)), and the dashboard stays up until Ctrl-C.
+
+Everything in History is appended to `data/history.jsonl`, tagged `live`, `replay` or `sim`. Phone numbers go in a `.env` file at the repo root (`RESIDENT_PHONE=...`, `CAREGIVER_PHONE=...`). Both files are gitignored.
+
+#### Messages and commands
+
+On top of the record page's messages, `run.py` sends `frame`s with a `"link"` field (one feed per Link) and:
 
 ```json
-{"type":"state","state":"COUNTDOWN","t":...,"deadline":...,"now":...,"sim":false}
+{"type":"state","state":"COUNTDOWN","t":...,"deadline":...,"now":...,"sim":false,"fall":7}
 {"type":"event","t":...,"label":"fall","confidence":1.0,"links":"A","details":{"peak":24.97,"static_change":0.58,"duration_s":3.09},"why":"classified","start":...,"end":...,"sim":false}
 {"type":"log","t":...,"text":"Confirmed Fall: Countdown started"}
 {"type":"alarm","on":true}
-{"type":"alert","t":...,"kind":"ask_resident","status":"sent"}
+{"type":"notify","t":...,"id":12,"to":"resident","kind":"check_in","fall":7,"text":"Fall detected. Are you OK? Reply 1 = I'm OK, 2 = I need help.","status":"sending"}
+{"type":"delivery","t":...,"id":12,"fall":7,"status":"sent"}
+{"type":"history","t":...,"what":"late_answer","mode":"live","fall":7,"late_s":30}
 ```
 
-`why` is `classified`, `moved_again` (moved during the Stillness Window) or `cut_short` (kept moving for 8 s). `alert` `kind` is `ask_resident` or `caregiver`. These come from `WebSink` in `backend/dashboard.py`, which `run.py` tees with the console output; the ntfy push can hook in there. `state` is re-sent every 0.5 s during a countdown, and a page that connects late gets the latest `state` and `alarm`, plus every `event`, `log` and `alert` so far.
+`why` is `classified`, `moved_again` (moved during the Stillness Window) or `cut_short` (kept moving for 8 s). `notify` `kind` is `check_in` (to the Resident), `alert`, `all_clear` or `help` (to the Caregiver). `delivery` `status` is `sent`, `failed`, or `not_delivered` when nothing reported back within 10 s. `state` is re-sent every 0.5 s during a Countdown, and a page that connects late gets the latest `state` and `alarm`, plus every `event`, `log`, `notify`, `delivery` and `history` so far.
+
+Pages and the messaging sidecar send commands back over the same `/ws`:
+
+| Command | From | Does |
+|---|---|---|
+| `{"cmd":"ok","fall":7}` | Resident | During the Countdown, cancels it. After the Alert, a Late Answer: ends the Alert and sends the Caregiver an All-clear. |
+| `{"cmd":"help","fall":7}` | Resident | A Help Request: forwarded to the Caregiver at once (the Countdown keeps running until the Fall Flow gets an `escalate()`). |
+| `{"cmd":"cancel"}` | Caregiver | Cancels the Countdown. |
+| `{"cmd":"resolve","reason":"handled"\|"false_alarm"}` | Caregiver | Closes an Alert. |
+| `{"cmd":"call"}` | Caregiver | Logs that the Caregiver called the Resident. |
+| `{"cmd":"delivered","id":12,"status":"sent"\|"failed"}` | sidecar | Reports what happened to a `notify`. |
+| `{"cmd":"simulate"}` | demo | Plays a Simulated Fall. |
+
+`fall` is optional on `ok` and `help`; without it the answer counts for the fall that is open now. An answer while no fall is open, or for another fall, is a Stale Answer and changes nothing.
+
+#### The messaging sidecar
+
+Texts go out through [Photon](https://photon.codes/) (iMessage), from a small Node process that connects to `ws://127.0.0.1:8000/ws` like a browser does ([docs/adr/0001](docs/adr/0001-messaging-sidecar-over-ws.md)). It sends each `notify` whose `status` is `sending` to the Resident's or Caregiver's number by `to`, answers with `delivered`, and turns the Resident's replies into commands: `1`, `ok`, `okay`, `yes`, `fine` or 👍 become `ok`, `2` or `help` become `help`, and anything else is forwarded to the Caregiver. Use three separate accounts: the demo laptop sends, and the Resident and the Caregiver each have their own phone. A reply from the sending account itself may be read as its own message.
 
 ## Layout
 
@@ -163,7 +192,7 @@ backend/
   config.py            all tunable numbers and the data folder location
   run.py               terminal front end for the pipeline (and the dashboard with --view)
   server.py            live page server: WebSocket hub, 20 Hz signal feed, static files
-  dashboard.py         dashboard glue: WebSink, browser commands, Simulate fall
+  dashboard.py         dashboard glue: WebSink, commands, history, Simulate fall
   capture/             getting CSI from the board into Frames
     csi.py             parse CSI lines, read logs
     live.py            read the receiver over USB, save sessions
@@ -198,6 +227,6 @@ data/
 
 ## Status
 
-Working: capture, replay, motion detection, both detectors, the fall flow, recording (with the live record page), training and the live dashboard. Not built yet: ntfy phone alerts and the Python side of the Arduino link. The alarm and alerts show on the dashboard and in the console.
+Working: capture, replay, motion detection, both detectors, the fall flow, recording (with the live record page), training and the live dashboard. Not built yet: the Photon messaging sidecar (the dashboard already publishes what it should send and accepts its replies) and the Python side of the Arduino link.
 
 Both receivers are read together, with motion, calibration and Motion Events per link, in the terminal pipeline, the capture check, replay and `record.py`. `train.py` takes features from the strongest link in each two-link clip, the same way the live pipeline does. The dashboard shows both links; the record page still shows one. The detector was tuned and trained on link A clips only, so it hasn't been checked on falls seen by link B yet.
