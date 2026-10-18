@@ -2,10 +2,10 @@
 // the Resident's replies into the dashboard's ok / help commands (docs/adr/0001).
 //
 //   node messaging/sidecar.mjs --console      try it without Photon: texts print here, type 1 or 2 to reply
-//   node messaging/sidecar.mjs                real texts, once sendText() and listenForReplies() use Photon
+//   node messaging/sidecar.mjs                real texts through Photon (run `npm install` in messaging/ first)
 //
 // Options: --url ws://127.0.0.1:8000/ws (match run.py's --view-port). Phone numbers come from .env:
-// RESIDENT_PHONE and CAREGIVER_PHONE.
+// RESIDENT_PHONE and CAREGIVER_PHONE; PHOTON_PROVIDER picks the line (see below).
 import { existsSync, readFileSync } from "node:fs";
 import readline from "node:readline";
 
@@ -27,7 +27,9 @@ async function sendText(phone, text) {
     console.log(`\n  [text to ${phone || "(no number)"}] ${text}\n`);
     return;
   }
-  throw new Error("sendText is not connected to Photon yet (see messaging/README.md)");
+  const { platform } = await photon();
+  const space = await platform.space.create(phone);
+  await space.send(text);
 }
 
 // Call onReply(phone, text) for every message that arrives. Runs once at startup.
@@ -38,7 +40,40 @@ async function listenForReplies(onReply) {
     rl.on("line", (line) => onReply(PHONES.resident, line));
     return;
   }
-  console.log("listenForReplies is not connected to Photon yet; replies won't reach the dashboard.");
+  try {
+    const { app } = await photon();
+    console.log(`Listening for replies (${PROVIDER}).`);
+    for await (const [, message] of app.messages) {
+      if (message.content.type === "text") onReply(message.sender.id, message.content.text);
+    }
+  } catch (e) {
+    console.log(`Stopped listening for replies: ${e.message}`);
+    if (PROVIDER === "imessage-local") console.log("Is this Mac signed into Messages, and does the terminal have Full Disk Access?");
+    process.exit(1);
+  }
+}
+
+// PHOTON_PROVIDER in .env picks the line: imessage-local (default; this Mac's Messages, no account) or
+// cloud (a Photon-managed line; needs PHOTON_PROJECT_ID, PHOTON_PROJECT_SECRET and `npm i @spectrum-ts/imessage`).
+const PROVIDER = process.env.PHOTON_PROVIDER || "imessage-local";
+let started = null;
+
+function photon() {
+  started ??= (async () => {
+    const { Spectrum } = await import("@spectrum-ts/core");
+    let provider, credentials;
+    if (PROVIDER === "imessage-local") {
+      ({ localIMessage: provider } = await import("@spectrum-ts/imessage-local"));
+    } else if (PROVIDER === "cloud") {
+      ({ imessage: provider } = await import("@spectrum-ts/imessage"));
+      credentials = { projectId: process.env.PHOTON_PROJECT_ID, projectSecret: process.env.PHOTON_PROJECT_SECRET };
+    } else {
+      throw new Error(`Unknown PHOTON_PROVIDER "${PROVIDER}" (use imessage-local or cloud)`);
+    }
+    const app = await Spectrum({ ...credentials, providers: [provider.config()], telemetry: false });
+    return { app, platform: provider(app) };
+  })();
+  return started;
 }
 // ---------------------------------------------------------------------------------------------
 

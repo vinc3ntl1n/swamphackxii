@@ -11,22 +11,33 @@ node messaging/sidecar.mjs --console                            # terminal 2
 
 Texts print in terminal 2. When the Check-in appears, type `1` and Enter: the dashboard shows "said they're OK" and the countdown stops. Type `2` for a Help Request. Anything else is passed to the Caregiver. Needs Node 22 (built-in WebSocket).
 
-## Connect Photon
+## Real texts with Photon
 
-Fill in the two functions at the top of `sidecar.mjs`; nothing else needs to change:
+The sidecar sends through Photon's Spectrum SDK. By default it uses `@spectrum-ts/imessage-local`, which drives this Mac's Messages app: free, no Photon account.
 
-- `sendText(phone, text)`: send one iMessage/SMS. Throw if it fails, so the dashboard shows "couldn't send".
-- `listenForReplies(onReply)`: call `onReply(phone, text)` for every incoming message. Replies from numbers other than `RESIDENT_PHONE` are ignored.
+1. On the Mac that will send (signed into Messages with its own Apple ID):
+   ```bash
+   cd messaging && npm install
+   ```
+2. Give the terminal app you run it from (Terminal, iTerm, VS Code) **Full Disk Access** in System Settings → Privacy & Security, then restart that app. Replies are read from `~/Library/Messages/chat.db`. Without access the sidecar stops with "unable to open database file".
+3. Put the numbers in `.env` at the repo root (gitignored), in `+1…` form:
+   ```
+   RESIDENT_PHONE=+15551234567
+   CAREGIVER_PHONE=+15557654321
+   RESIDENT_NAME=Rose
+   ```
+4. Run it:
+   ```bash
+   python -m backend.run --replay backend/assets/sim_fall.log.gz   # terminal 1
+   node messaging/sidecar.mjs                                      # terminal 2
+   ```
+   The first send may make macOS ask whether the terminal may control Messages; allow it.
 
-Put the numbers in `.env` at the repo root (gitignored):
+Use three separate accounts: the Mac running the sidecar sends, and the Resident and the Caregiver each have their own phone. Messages the Mac sends itself are never read as replies.
 
-```
-RESIDENT_PHONE=+15551234567
-CAREGIVER_PHONE=+15557654321
-RESIDENT_NAME=Rose
-```
+"sent" means Messages accepted the text, not that it reached the phone. If the number has no iMessage, Messages may fall back to SMS (needs an iPhone paired for Text Message Forwarding) or fail silently.
 
-Use three separate accounts: the Mac running the sidecar sends, and the Resident and the Caregiver each have their own phone. With `imessage-local`, that Mac must be signed into Messages, and the terminal may need Full Disk Access.
+To switch to a Photon cloud line later, set `PHOTON_PROVIDER=cloud`, `PHOTON_PROJECT_ID` and `PHOTON_PROJECT_SECRET` in `.env` and run `npm install @spectrum-ts/imessage` in `messaging/`. That path is written but not yet tested.
 
 ## What it does on the wire
 
