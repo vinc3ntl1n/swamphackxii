@@ -14,7 +14,7 @@ import math
 import cadquery as cq
 
 # ---------------- breadboard (edit to your measurements) ----------------
-BB_W, BB_L, BB_H = 55.0, 83.0, 9.5
+BB_W, BB_L, BB_H = 59.5, 85.5, 10.0   # measured from photo: ~59 x 85 mm (+ margin)
 CLR, NUB = 0.6, 2.0
 ABOVE = 12.0                   # headroom over the board for XIAO, plug, LED, wires
 FRONT_GAP = 6.0                # room at the antenna end for the antenna cable to turn
